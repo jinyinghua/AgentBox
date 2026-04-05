@@ -73,12 +73,16 @@ class LinuxEnvironmentManager(private val context: Context) {
     /**
      * 带重定向处理的文件下载逻辑
      */
-    private fun downloadFile(urlString: String, outFile: File) {
+        private fun downloadFile(urlString: String, outFile: File) {
         try {
             var url = URL(urlString)
             var redirectCount = 0
             while (redirectCount < 5) {
                 val connection = url.openConnection() as java.net.HttpURLConnection
+                
+                // ✅ 核心修复：添加模拟浏览器的 User-Agent 头部，防止被镜像站拦截 (解决 403 错误)
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36")
+                
                 connection.connectTimeout = 15000
                 connection.readTimeout = 30000
                 connection.instanceFollowRedirects = false
@@ -102,6 +106,14 @@ class LinuxEnvironmentManager(private val context: Context) {
                         input.copyTo(output)
                     }
                 }
+                return
+            }
+            throw java.io.IOException("Too many redirects")
+        } catch (e: Exception) {
+            throw Exception("${e.javaClass.simpleName}: ${e.message ?: "no message"}", e)
+        }
+    }
+}
                 return
             }
             throw java.io.IOException("Too many redirects")
