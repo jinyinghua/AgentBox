@@ -33,18 +33,26 @@ import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.net.NetworkInterface
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 /**
- * MCP Server - 稳定性增强版
+ * MCP Server - 稳定性增强版 (多会话支持 + 严格 JSON-RPC 规范)
  */
 class McpService : Service() {
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val json = Json { 
         ignoreUnknownKeys = true
-        prettyPrint = false // 确保输出是单行，防止破坏 SSE 格式
-        encodeDefaults = true // 【关键修复】：确保 jsonrpc="2.0" 会被输出到响应中！
+        prettyPrint = false
+        // 【核心修复】：关闭 encodeDefaults。
+        // 配合 McpModels 里的 @Required，可以做到：
+        // 1. 强制输出 jsonrpc="2.0"
+        // 2. 当 error 为空时，不输出 "error": null (符合 JSON-RPC 2.0 规范：result 和 error 二选一)
+        encodeDefaults = false 
     }
+
+    // 使用 Map 管理多个并发会话，防止 Claude Desktop 多重连接时互相覆盖
+    private val sessions = ConcurrentHashMap<String, SseSession>()
 
     companion object {
         const val TAG = "McpService"
@@ -75,7 +83,6 @@ class McpService : Service() {
         }
     }
 
-    private var currentSession: SseSession? = null
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private lateinit var toolExecutor: ToolExecutor
 
@@ -96,8 +103,8 @@ class McpService : Service() {
         isRunning = false
         server?.stop(500, 1000)
         server = null
-        currentSession?.responseChannel?.close()
-        currentSession = null
+        sessions.values.forEach { it.responseChannel.close() }
+        sessions.clear()
         super.onDestroy()
     }
 
@@ -130,15 +137,14 @@ class McpService : Service() {
                 sse("/sse") {
                     val sessionId = UUID.randomUUID().toString()
                     val session = SseSession(id = sessionId)
-                    currentSession = session
-                    log("SSE Connected: $sessionId")
+                    sessions[sessionId] = session
+                    log("SSE Connected: $sessionId (Active: ${sessions.size})")
 
                     try {
-                        // 包含 sessionId 在 endpoint 中以符合规范约定，尽管我们全局复用 session
+                        // 告知客户端消息 POST 的终点，并带上识别该连接的 sessionId
                         send(ServerSentEvent(data = "/message?sessionId=$sessionId", event = "endpoint"))
                         
                         var lastPing = System.currentTimeMillis()
-                        // 移除独立协程发送心跳，避免由于并发调用 send() 导致底层 Socket Crash 或流损坏
                         while (isActive) {
                             val timeToNextPing = 15000L - (System.currentTimeMillis() - lastPing)
                             if (timeToNextPing <= 0) {
@@ -152,37 +158,42 @@ class McpService : Service() {
                             }
                             
                             if (response != null) {
-                                log("→ SSE Sending Response: ${response.take(50)}...")
+                                log("→ SSE Sending Response to $sessionId: ${response.take(50)}...")
                                 send(ServerSentEvent(data = response, event = "message"))
                             }
                         }
                     } catch (e: Exception) {
                         log("SSE Session Error ($sessionId): ${e.message}")
                     } finally {
-                        if (currentSession?.id == sessionId) {
-                            currentSession = null
-                        }
-                        log("SSE Disconnected: $sessionId")
+                        sessions.remove(sessionId)
+                        log("SSE Disconnected: $sessionId (Active: ${sessions.size})")
                     }
                 }
 
                 post("/message") {
-                    val session = currentSession
+                    // 从查询参数获取 sessionId
+                    val sessionId = call.request.queryParameters["sessionId"]
+                    val session = if (sessionId != null) {
+                        sessions[sessionId]
+                    } else {
+                        sessions.values.firstOrNull()
+                    }
+
                     if (session == null) {
-                        log("Error: POST received but no SSE session active")
-                        call.respond(HttpStatusCode.ServiceUnavailable, "No active SSE session")
+                        log("Error: POST received for session $sessionId but no SSE active")
+                        call.respond(HttpStatusCode.ServiceUnavailable, "No active SSE session for id $sessionId")
                         return@post
                     }
 
                     try {
                         val bodyText = call.receiveText()
-                        log("← POST Received: ${bodyText.take(100)}...")
+                        log("← POST Received ($sessionId): ${bodyText.take(100)}...")
                         val request = json.decodeFromString(JsonRpcRequest.serializer(), bodyText)
                         
                         serviceScope.launch {
                             try {
                                 val response = handleRequest(request)
-                                // 【关键修复】：如果 request.id 为 null，说明这是 Notification，绝对不能发送 Response 回去！
+                                // 如果 request.id 为 null，说明这是 Notification，绝对不能发送 Response 回去
                                 if (request.id != null) {
                                     val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
                                     session.responseChannel.send(responseJson)
@@ -194,7 +205,6 @@ class McpService : Service() {
                             }
                         }
                         
-                        // MCP 规范要求 POST 请求必须返回 202 Accepted 且 Body 必须为空
                         call.respondText("", status = HttpStatusCode.Accepted)
                     } catch (e: Exception) {
                         log("POST Parse Error: ${e.message}")

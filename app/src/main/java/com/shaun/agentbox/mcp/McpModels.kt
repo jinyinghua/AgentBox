@@ -2,6 +2,7 @@ package com.shaun.agentbox.mcp
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Required
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -15,7 +16,7 @@ import kotlinx.serialization.json.putJsonObject
 
 @Serializable
 data class JsonRpcRequest(
-    val jsonrpc: String = "2.0",
+    @Required val jsonrpc: String = "2.0",
     val method: String,
     val params: JsonElement? = null,
     val id: JsonElement? = null
@@ -23,7 +24,7 @@ data class JsonRpcRequest(
 
 @Serializable
 data class JsonRpcResponse(
-    val jsonrpc: String = "2.0",
+    @Required val jsonrpc: String = "2.0",
     val id: JsonElement? = null,
     val result: JsonElement? = null,
     val error: JsonRpcError? = null
