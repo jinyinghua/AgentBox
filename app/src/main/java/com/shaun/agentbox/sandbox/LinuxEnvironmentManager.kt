@@ -71,9 +71,9 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     /**
-     * 带重定向处理的文件下载逻辑
+     * 带重定向处理和 User-Agent 的文件下载逻辑
      */
-        private fun downloadFile(urlString: String, outFile: File) {
+    private fun downloadFile(urlString: String, outFile: File) {
         try {
             var url = URL(urlString)
             var redirectCount = 0
@@ -110,15 +110,7 @@ class LinuxEnvironmentManager(private val context: Context) {
             }
             throw java.io.IOException("Too many redirects")
         } catch (e: Exception) {
-            throw Exception("${e.javaClass.simpleName}: ${e.message ?: "no message"}", e)
-        }
-    }
-}
-                return
-            }
-            throw java.io.IOException("Too many redirects")
-        } catch (e: Exception) {
-            // 捕获并显式抛出包含类名和原始消息的异常
+            // 抛出带有具体异常类名的信息，方便排查
             throw Exception("${e.javaClass.simpleName}: ${e.message ?: "no message"}", e)
         }
     }
