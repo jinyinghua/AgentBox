@@ -2,6 +2,7 @@ package com.shaun.agentbox
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -36,6 +37,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.NetworkInterface
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -47,6 +49,21 @@ class MainActivity : ComponentActivity() {
             AgentBoxTheme {
                 AgentBoxApp()
             }
+        }
+    }
+
+    /**
+     * 获取本机 IP 地址（替代丢失的 McpService.getLocalIpAddress）。
+     */
+    private fun getLocalIpAddress(): String {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
+            interfaces.firstOrNull { it.isUp && !it.isLoopback }?.inetAddresses
+                ?.toList()?.firstOrNull { !it.isLoopbackAddress && it.hostAddress.contains('.') }
+                ?.hostAddress ?: "127.0.0.1"
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Error fetching local IP", e)
+            "127.0.0.1"
         }
     }
 }
