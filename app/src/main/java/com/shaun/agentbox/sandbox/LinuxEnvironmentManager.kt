@@ -10,22 +10,20 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.net.URL
+import java.io.InputStream
 
 /**
- * Linux 环境管理器 (PRoot + Alpine)
- * 核心逻辑：下载静态编译的 proot 和 Alpine rootfs，并在 Android 私有目录下构建环境。
+ * Linux 环境管理器 (Assets 模式)
+ * 核心逻辑：从 APK 内置的 Assets 目录提取 proot 和 Alpine rootfs。
+ * 解决了网络环境（403 错误、防火墙等）导致安装失败的问题。
  */
 class LinuxEnvironmentManager(private val context: Context) {
 
     companion object {
         private const val TAG = "LinuxEnv"
-        
-        // 使用 SourceForge 提供的静态编译 proot (aarch64)
-        private const val PROOT_URL = "https://sourceforge.net/projects/proot.mirror/files/v5.3.0/proot-v5.3.0-aarch64-static/download"
-        
-        // 使用清华大学 TUNA 镜像的 Alpine Mini Rootfs (ARM64)
-        private const val ROOTFS_URL = "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.9-aarch64.tar.gz"
+        // 对应 assets 中的文件名
+        private const val PROOT_ASSET = "proot"
+        private const val ALPINE_ASSET = "alpine.tar.gz"
     }
 
     private val systemDir = File(context.filesDir, "system_rootfs")
@@ -36,90 +34,54 @@ class LinuxEnvironmentManager(private val context: Context) {
     val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "bin/sh").exists()
 
     /**
-     * 安装环境 (下载并解压)
+     * 安装环境 (从 Assets 复制并解压)
      * @param onProgress 进度回调 (进度值, 状态描述)
      */
     suspend fun install(onProgress: (Int, String) -> Unit) = withContext(Dispatchers.IO) {
-        if (isInstalled) {
-            onProgress(100, "Already installed")
-            return@withContext
-        }
-
-        if (!systemDir.exists()) systemDir.mkdirs()
-        if (!rootfsDir.exists()) rootfsDir.mkdirs()
-
-        // 1. 下载 proot
-        onProgress(10, "Downloading proot engine...")
-        downloadFile(PROOT_URL, prootBin)
-        prootBin.setExecutable(true)
-
-        // 2. 下载 Rootfs
-        onProgress(30, "Downloading Alpine Rootfs...")
-        val tarGzFile = File(systemDir, "alpine.tar.gz")
-        downloadFile(ROOTFS_URL, tarGzFile)
-
-        // 3. 解压 (处理 Symlinks)
-        onProgress(60, "Extracting Rootfs (this may take a while)...")
-        extractTarGz(tarGzFile, rootfsDir)
-        tarGzFile.delete()
-
-        // 4. 配置网络 (DNS)
-        onProgress(95, "Configuring DNS...")
-        setupDns()
-
-        onProgress(100, "Installation complete")
-    }
-
-    /**
-     * 带重定向处理和 User-Agent 的文件下载逻辑
-     */
-    private fun downloadFile(urlString: String, outFile: File) {
         try {
-            var url = URL(urlString)
-            var redirectCount = 0
-            while (redirectCount < 5) {
-                val connection = url.openConnection() as java.net.HttpURLConnection
-                
-                // ✅ 核心修复：添加模拟浏览器的 User-Agent 头部，防止被镜像站拦截 (解决 403 错误)
-                connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36")
-                
-                connection.connectTimeout = 15000
-                connection.readTimeout = 30000
-                connection.instanceFollowRedirects = false
-                
-                val status = connection.responseCode
-                if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP || 
-                    status == java.net.HttpURLConnection.HTTP_MOVED_PERM || 
-                    status == java.net.HttpURLConnection.HTTP_SEE_OTHER) {
-                    val newUrl = connection.getHeaderField("Location")
-                    url = URL(url, newUrl)
-                    redirectCount++
-                    continue
-                }
-
-                if (status != java.net.HttpURLConnection.HTTP_OK) {
-                    throw java.io.IOException("HTTP Error $status: ${connection.responseMessage}")
-                }
-                
-                connection.inputStream.use { input ->
-                    FileOutputStream(outFile).use { output ->
-                        input.copyTo(output)
-                    }
-                }
-                return
+            if (isInstalled) {
+                onProgress(100, "Already installed")
+                return@withContext
             }
-            throw java.io.IOException("Too many redirects")
+
+            if (!systemDir.exists()) systemDir.mkdirs()
+            if (!rootfsDir.exists()) rootfsDir.mkdirs()
+
+            // 1. 提取 proot
+            onProgress(20, "Extracting proot engine from assets...")
+            copyAssetToFile(PROOT_ASSET, prootBin)
+            prootBin.setExecutable(true)
+
+            // 2. 解压 Alpine Rootfs (直接从 Assets 流读取，节省存储空间)
+            onProgress(50, "Installing Alpine Rootfs (this may take 1-2 minutes)...")
+            context.assets.open(ALPINE_ASSET).use { assetStream ->
+                extractTarGzFromStream(assetStream, rootfsDir)
+            }
+
+            // 3. 配置网络 (DNS)
+            onProgress(95, "Finalizing environment...")
+            setupDns()
+
+            onProgress(100, "Installation successful!")
         } catch (e: Exception) {
-            // 抛出带有具体异常类名的信息，方便排查
-            throw Exception("${e.javaClass.simpleName}: ${e.message ?: "no message"}", e)
+            Log.e(TAG, "Install failed", e)
+            throw Exception("Failed to install from assets: ${e.message}", e)
+        }
+    }
+
+    private fun copyAssetToFile(assetName: String, outFile: File) {
+        context.assets.open(assetName).use { input ->
+            FileOutputStream(outFile).use { output ->
+                input.copyTo(output)
+            }
         }
     }
 
     /**
-     * 解压 tar.gz 并还原软链接
+     * 直接从输入流解压 tar.gz
      */
-    private fun extractTarGz(tarGzFile: File, destDir: File) {
-        TarArchiveInputStream(GzipCompressorInputStream(tarGzFile.inputStream())).use { tarInput ->
+    private fun extractTarGzFromStream(inputStream: InputStream, destDir: File) {
+        TarArchiveInputStream(GzipCompressorInputStream(inputStream)).use { tarInput ->
             var entry = tarInput.nextTarEntry
             while (entry != null) {
                 val outFile = File(destDir, entry.name)
@@ -145,7 +107,7 @@ class LinuxEnvironmentManager(private val context: Context) {
 
     private fun setupDns() {
         val etcDir = File(rootfsDir, "etc")
-        etcDir.mkdirs()
+        if (!etcDir.exists()) etcDir.mkdirs()
         File(etcDir, "resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
     }
 
