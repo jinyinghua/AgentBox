@@ -19,7 +19,13 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.sse.*
 import io.ktor.sse.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -29,9 +35,15 @@ import java.net.NetworkInterface
 import java.util.UUID
 
 /**
- * MCP Server - 单客户端版本，集成工具执行逻辑。
+ * MCP Server - 稳定性增强版
  */
 class McpService : Service() {
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private val json = Json { 
+        ignoreUnknownKeys = true
+        prettyPrint = false // 确保输出是单行，防止破坏 SSE 格式
+    }
 
     companion object {
         const val TAG = "McpService"
@@ -49,9 +61,6 @@ class McpService : Service() {
             onLog?.invoke(msg)
         }
 
-        /**
-         * 获取本机 IP 地址。
-         */
         fun getLocalIpAddress(): String {
             return try {
                 val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
@@ -65,10 +74,9 @@ class McpService : Service() {
         }
     }
 
-    // 单客户端会话
     private var currentSession: SseSession? = null
     private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
-    private lateinit var toolExecutor: ToolExecutor // 引用工具执行器
+    private lateinit var toolExecutor: ToolExecutor
 
     override fun onCreate() {
         super.onCreate()
@@ -85,37 +93,28 @@ class McpService : Service() {
     override fun onDestroy() {
         log("Stopping MCP Server...")
         isRunning = false
-        server?.stop(1000, 2000)
+        server?.stop(500, 1000)
         server = null
         currentSession?.responseChannel?.close()
         currentSession = null
         super.onDestroy()
-        log("MCP Server stopped.")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "MCP Server",
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Keeps MCP Server running"
-            }
-            getSystemService(NotificationManager::class.java)
-                ?.createNotificationChannel(channel)
+            val channel = NotificationChannel(CHANNEL_ID, "MCP Server", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
     }
 
     private fun startForegroundNotification() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AgentBox MCP Server")
-            .setContentText("Listening at http://${getLocalIpAddress()}:$PORT/sse")
+            .setContentText("Running at http://${getLocalIpAddress()}:$PORT/sse")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setOngoing(true)
-            .build()
+            .setOngoing(true).build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
@@ -124,118 +123,102 @@ class McpService : Service() {
 
         server = embeddedServer(CIO, port = PORT, host = "0.0.0.0") {
             install(SSE)
-            install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+            install(ContentNegotiation) { json(json) }
 
             routing {
-                // SSE 路由：建立单客户端长连接
                 sse("/sse") {
-                    if (currentSession != null) {
-                        call.respond(HttpStatusCode.Conflict, "Another client is already connected.")
-                        return@sse
-                    }
-
                     val sessionId = UUID.randomUUID().toString()
                     val session = SseSession(id = sessionId)
                     currentSession = session
-                    log("SSE client connected: $sessionId")
+                    log("SSE Connected: $sessionId")
+
+                    val heartbeatJob = launch {
+                        while (isActive) {
+                            delay(15000)
+                            try {
+                                send(ServerSentEvent(data = "", event = "ping"))
+                            } catch (e: Exception) { break }
+                        }
+                    }
 
                     try {
-                        // 告知客户端消息投递路径（POST /message）
                         send(ServerSentEvent(data = "/message", event = "endpoint"))
-
-                        // 转发响应到客户端 SSE
-                        for (response in session.responseChannel) {
+                        
+                        // 使用无限循环从通道读取并发送，增加错误捕获
+                        while (isActive) {
+                            val response = session.responseChannel.receive()
+                            log("→ SSE Sending Response: ${response.take(50)}...")
                             send(ServerSentEvent(data = response, event = "message"))
                         }
+                    } catch (e: Exception) {
+                        log("SSE Session Error ($sessionId): ${e.message}")
                     } finally {
-                        currentSession = null
-                        log("SSE client disconnected: $sessionId")
+                        heartbeatJob.cancel()
+                        if (currentSession?.id == sessionId) {
+                            currentSession = null
+                        }
+                        log("SSE Disconnected: $sessionId")
                     }
                 }
 
-                // POST 路由：接收 JSON-RPC 消息
                 post("/message") {
                     val session = currentSession
                     if (session == null) {
-                        call.respond(HttpStatusCode.NotFound, "No active SSE session")
+                        log("Error: POST received but no SSE session active")
+                        call.respond(HttpStatusCode.ServiceUnavailable, "No active SSE session")
                         return@post
                     }
 
                     try {
                         val bodyText = call.receiveText()
-                        log("← Received POST: $bodyText")
-
-                        // 解析 JSON-RPC 请求并处理
-                        val request = Json.decodeFromString(JsonRpcRequest.serializer(), bodyText)
-                        val response = handleRequest(request)
-                        val responseJson = Json.encodeToString(JsonRpcResponse.serializer(), response)
-
-                        // 推送返回结果到 SSE 会话
-                        session.responseChannel.send(responseJson)
-                        call.respond(HttpStatusCode.Accepted, "Message processed")
+                        log("← POST Received: ${bodyText.take(100)}...")
+                        val request = json.decodeFromString(JsonRpcRequest.serializer(), bodyText)
+                        
+                        serviceScope.launch {
+                            try {
+                                val response = handleRequest(request)
+                                val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
+                                session.responseChannel.send(responseJson)
+                            } catch (e: Exception) {
+                                log("Async Task Error: ${e.message}")
+                            }
+                        }
+                        
+                        call.respond(HttpStatusCode.Accepted, "Accepted")
                     } catch (e: Exception) {
-                        log("Error processing message: ${e.message}")
-                        call.respond(HttpStatusCode.BadRequest, "Invalid JSON-RPC request")
+                        log("POST Parse Error: ${e.message}")
+                        call.respond(HttpStatusCode.BadRequest, "Invalid Request")
                     }
                 }
             }
         }.start(wait = false)
 
         isRunning = true
-        log("MCP Server started at http://${getLocalIpAddress()}:$PORT/sse")
+        log("MCP Server started")
     }
 
-    /**
-     * 处理 JSON-RPC 请求，遵循 MCP 协议。
-     */
     private suspend fun handleRequest(request: JsonRpcRequest): JsonRpcResponse {
         return try {
             val result: JsonElement? = when (request.method) {
-                "initialize" -> {
-                    McpTools.buildInitializeResult()
-                }
-                "notifications/initialized" -> {
-                    null // 忽略通知，不返回结果
-                }
-                "tools/list" -> {
-                    McpTools.buildToolListResult()
-                }
+                "initialize" -> McpTools.buildInitializeResult()
+                "notifications/initialized" -> null
+                "tools/list" -> McpTools.buildToolListResult()
                 "tools/call" -> {
-                    // 解析 tools/call 参数
-                    val callParams = Json.decodeFromJsonElement<CallToolParams>(request.params ?: throw Exception("Missing params for tools/call"))
+                    val callParams = json.decodeFromJsonElement<CallToolParams>(request.params ?: throw Exception("Missing params"))
                     val toolResult = toolExecutor.executeTool(callParams.name, callParams.arguments)
-                    Json.encodeToJsonElement(toolResult)
+                    json.encodeToJsonElement(toolResult)
                 }
                 else -> {
-                    // 兼容旧逻辑或直接报错
-                    log("Warning: Received unknown method ${request.method}, trying direct tool execution")
-                    val params = request.params?.jsonObject?.let { jsonObject ->
-                        jsonObject.mapValues { (_, value) -> value }
-                    } ?: emptyMap()
-                    val toolResult = toolExecutor.executeTool(request.method, params)
-                    Json.encodeToJsonElement(toolResult)
+                    val params = request.params?.jsonObject?.mapValues { it.value } ?: emptyMap()
+                    json.encodeToJsonElement(toolExecutor.executeTool(request.method, params))
                 }
             }
-
-            JsonRpcResponse(
-                id = request.id,
-                result = result
-            )
+            JsonRpcResponse(id = request.id, result = result)
         } catch (e: Exception) {
-            log("Error in handleRequest: ${e.message}")
-            JsonRpcResponse(
-                id = request.id,
-                error = JsonRpcError(
-                    code = -32603,
-                    message = "Internal error: ${e.message}"
-                )
-            )
+            log("Method ${request.method} Error: ${e.message}")
+            JsonRpcResponse(id = request.id, error = JsonRpcError(code = -32603, message = e.message ?: "Unknown error"))
         }
     }
 
-    // 单客户端会话的数据结构
-    private data class SseSession(
-        val id: String,
-        val responseChannel: Channel<String> = Channel(Channel.UNLIMITED)
-    )
+    private data class SseSession(val id: String, val responseChannel: Channel<String> = Channel(Channel.UNLIMITED))
 }
