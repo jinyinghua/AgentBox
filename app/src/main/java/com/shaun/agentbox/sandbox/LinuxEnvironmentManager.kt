@@ -65,7 +65,8 @@ class LinuxEnvironmentManager(private val context: Context) {
             onProgress(100, "Installation successful!")
         } catch (e: Exception) {
             Log.e(TAG, "Install failed", e)
-            throw Exception("Failed to install from assets: ${e.message}", e)
+            // 修改这里：抛出更详细的错误（包含完整的类名和堆栈的最顶层信息）
+            throw Exception("Asset Error [${e.javaClass.simpleName}]: ${e.message}", e)
         }
     }
 
