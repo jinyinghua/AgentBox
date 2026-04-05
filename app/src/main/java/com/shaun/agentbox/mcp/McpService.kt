@@ -43,6 +43,7 @@ class McpService : Service() {
     private val json = Json { 
         ignoreUnknownKeys = true
         prettyPrint = false // 确保输出是单行，防止破坏 SSE 格式
+        encodeDefaults = true // 【关键修复】：确保 jsonrpc="2.0" 会被输出到响应中！
     }
 
     companion object {
@@ -181,8 +182,13 @@ class McpService : Service() {
                         serviceScope.launch {
                             try {
                                 val response = handleRequest(request)
-                                val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
-                                session.responseChannel.send(responseJson)
+                                // 【关键修复】：如果 request.id 为 null，说明这是 Notification，绝对不能发送 Response 回去！
+                                if (request.id != null) {
+                                    val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
+                                    session.responseChannel.send(responseJson)
+                                } else {
+                                    log("Ignored response for Notification: ${request.method}")
+                                }
                             } catch (e: Exception) {
                                 log("Async Task Error: ${e.message}")
                             }
