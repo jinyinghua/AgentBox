@@ -20,22 +20,11 @@ import io.ktor.server.routing.*
 import io.ktor.server.sse.*
 import io.ktor.sse.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
-import java.net.NetworkInterface
+import java.io.File
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
-/**
- * AgentBox MCP Server - Foreground Service
- *
- * 实现标准的 MCP (Model Context Protocol) over SSE 传输：
- * - GET /sse         → 建立 SSE 长连接，首条消息发送 endpoint 事件
- * - POST /message    → 接收 JSON-RPC 请求，通过 SSE 流返回响应
- *
- * 完整实现 MCP 生命周期：
- * initialize → initialized (notification) → tools/list → tools/call
- */
 class McpService : Service() {
 
     companion object {
@@ -43,80 +32,22 @@ class McpService : Service() {
         const val PORT = 8192
         private const val CHANNEL_ID = "mcp_service"
         private const val NOTIFICATION_ID = 1
-
-        /** 服务运行状态（供 UI 观察） */
-        @Volatile
-        var isRunning: Boolean = false
+        private const val ALPINE_ROOTFS_PATH = "/data/local/tmp/alpine_rootfs"  // Path to Alpine rootfs
+        @Volatile var isRunning: Boolean = false
             private set
 
-        /** 服务器日志回调（供 UI 显示终端日志） */
         var onLog: ((String) -> Unit)? = null
-
         private fun log(msg: String) {
             Log.d(TAG, msg)
             onLog?.invoke(msg)
         }
-
-        /**
-         * 获取本机局域网 WiFi IP 地址。
-         * 优先 wlan 接口，排除回环和 IPv6。
-         */
-        fun getLocalIpAddress(): String {
-            try {
-                val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
-
-                // 优先找 wlan 接口
-                for (iface in interfaces) {
-                    if (!iface.isUp || iface.isLoopback) continue
-                    val isWlan = iface.name.startsWith("wlan", ignoreCase = true)
-                    if (isWlan) {
-                        for (addr in iface.inetAddresses) {
-                            if (!addr.isLoopbackAddress && addr.hostAddress?.contains(':') == false) {
-                                return addr.hostAddress!!
-                            }
-                        }
-                    }
-                }
-
-                // 退而求其次：任何非回环 IPv4
-                for (iface in interfaces) {
-                    if (!iface.isUp || iface.isLoopback) continue
-                    for (addr in iface.inetAddresses) {
-                        if (!addr.isLoopbackAddress && addr.hostAddress?.contains(':') == false) {
-                            return addr.hostAddress!!
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to get IP", e)
-            }
-            return "127.0.0.1"
-        }
     }
 
-    // ===================== SSE 会话管理 =====================
-
-    /**
-     * 每个 SSE 连接对应一个 Session。
-     * 客户端 POST /message?sessionId=xxx 时，通过 sessionId 找到对应的 Channel，
-     * 将 JSON-RPC 响应推入 Channel，SSE 循环取出并发送。
-     */
-    private data class SseSession(
-        val id: String,
-        val responseChannel: Channel<String> = Channel(Channel.UNLIMITED)
-    )
-
-    private val sessions = ConcurrentHashMap<String, SseSession>()
-
-    // ===================== Service 生命周期 =====================
-
-    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
-    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private lateinit var toolExecutor: ToolExecutor
+    private var server: CIOApplicationEngine? = null
+    private lateinit var sseResChannel: Channel<String>
 
     override fun onCreate() {
         super.onCreate()
-        toolExecutor = ToolExecutor(this)
         createNotificationChannel()
     }
 
@@ -127,182 +58,132 @@ class McpService : Service() {
     }
 
     override fun onDestroy() {
-        log("MCP Server stopping...")
+        log("Stopping MCP Server...")
         isRunning = false
-        // 关闭所有会话
-        sessions.values.forEach { it.responseChannel.close() }
-        sessions.clear()
         server?.stop(1000, 2000)
         server = null
-        serviceScope.cancel()
+        sseResChannel.close()
         super.onDestroy()
         log("MCP Server stopped.")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // ===================== 前台通知 =====================
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "MCP Server",
+                CHANNEL_ID, 
+                "MCP Server", 
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps MCP Server running in background"
+                description = "Keeps MCP Server running"
             }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java)
+                ?.createNotificationChannel(channel)
         }
     }
 
     private fun startForegroundNotification() {
-        val ip = getLocalIpAddress()
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AgentBox MCP Server")
-            .setContentText("Running at http://$ip:$PORT/sse")
+            .setContentText("Listening at http://127.0.0.1:$PORT/sse")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setOngoing(true)
             .build()
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    // ===================== Ktor Server =====================
-
     private fun startServer() {
         if (server != null) return
 
-        server = embeddedServer(CIO, port = PORT, host = "0.0.0.0") {
+        sseResChannel = Channel(Channel.UNLIMITED)
+
+        server = embeddedServer(CIO, port = PORT, host = "127.0.0.1") {
             install(SSE)
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
 
             routing {
-                // ---- SSE 端点：建立长连接 ----
+                // SSE 长连接 - 单客户端实现
                 sse("/sse") {
                     val sessionId = UUID.randomUUID().toString()
-                    val session = SseSession(id = sessionId)
-                    sessions[sessionId] = session
-
-                    val ip = getLocalIpAddress()
-                    val endpointUrl = "http://$ip:$PORT/message?sessionId=$sessionId"
                     log("SSE client connected: $sessionId")
 
                     try {
-                        // MCP 规范：首条 SSE 事件必须是 endpoint，告诉客户端 POST 地址
-                        send(ServerSentEvent(data = endpointUrl, event = "endpoint"))
+                        // 通知客户端发消息的路由
+                        send(ServerSentEvent(data = "/message", event = "endpoint"))
 
-                        // 持续从 Channel 取出响应，通过 SSE 推给客户端
-                        for (responseJson in session.responseChannel) {
-                            send(ServerSentEvent(data = responseJson, event = "message"))
+                        // 向客户端推送响应
+                        for (response in sseResChannel) {
+                            send(ServerSentEvent(data = response, event = "message"))
                         }
                     } finally {
-                        sessions.remove(sessionId)
                         log("SSE client disconnected: $sessionId")
                     }
                 }
 
-                // ---- Message 端点：接收 JSON-RPC 请求 ----
+                // 接收客户端的 POST 数据
                 post("/message") {
-                    val sessionId = call.request.queryParameters["sessionId"]
-                    if (sessionId == null) {
-                        call.respond(HttpStatusCode.BadRequest, "Missing sessionId")
-                        return@post
-                    }
-
-                    val session = sessions[sessionId]
-                    if (session == null) {
-                        call.respond(HttpStatusCode.NotFound, "Session not found: $sessionId")
-                        return@post
-                    }
-
                     try {
                         val bodyText = call.receiveText()
                         log("← $bodyText")
 
+                        // 处理JSONRPC请求
                         val request = Json.decodeFromString<JsonRpcRequest>(bodyText)
-                        val response = handleRequest(request)
+                        val response = handleRequestInRootFs(request) // Alpine RootFS
                         val responseJson = Json.encodeToString(JsonRpcResponse.serializer(), response)
 
+                        // 将响应推到 SSE 通道
                         log("→ $responseJson")
-
-                        // 将响应推入该会话的 SSE 通道
-                        session.responseChannel.send(responseJson)
-
-                        // POST 本身返回 202 Accepted（响应通过 SSE 异步推送）
+                        sseResChannel.send(responseJson)
                         call.respond(HttpStatusCode.Accepted, "Accepted")
                     } catch (e: Exception) {
-                        log("Error handling message: ${e.message}")
-                        // 即使处理出错，也要通过 SSE 推送错误响应
-                        val errorResponse = JsonRpcResponse(
-                            error = JsonRpcError(
-                                code = -32700,
-                                message = "Parse error: ${e.message}"
-                            )
-                        )
-                        session.responseChannel.send(
-                            Json.encodeToString(JsonRpcResponse.serializer(), errorResponse)
-                        )
-                        call.respond(HttpStatusCode.Accepted, "Accepted")
+                        log("Error processing message: ${e.message}")
+                        call.respond(HttpStatusCode.BadRequest, "Invalid message")
                     }
                 }
             }
         }.start(wait = false)
 
         isRunning = true
-        val ip = getLocalIpAddress()
-        log("MCP Server started at http://$ip:$PORT/sse")
+        log("MCP Server started at http://127.0.0.1:$PORT/sse")
     }
 
-    // ===================== MCP 协议处理 =====================
-
-    private suspend fun handleRequest(request: JsonRpcRequest): JsonRpcResponse {
+    private suspend fun handleRequestInRootFs(request: JsonRpcRequest): JsonRpcResponse {
         return when (request.method) {
-
-            // ---- 握手阶段 ----
-            "initialize" -> {
-                log("Client initializing...")
-                JsonRpcResponse(
-                    id = request.id,
-                    result = McpTools.buildInitializeResult()
-                )
+            "read_file" -> {
+                val path = request.params?.jsonObject?.get("path")?.jsonPrimitive?.contentOrNull
+                if (path != null) {
+                    val safePath = "$ALPINE_ROOTFS_PATH/$path"
+                    val content = File(safePath).takeIf { it.exists() }?.readText()
+                    JsonRpcResponse(id = request.id, result = Json.encodeToJsonElement(mapOf("content" to content)))
+                } else {
+                    errorResponse(request.id, -32602, "Missing 'path'")
+                }
             }
-
-            // notifications/initialized 是通知（无 id），不需要响应
-            "notifications/initialized" -> {
-                log("Client initialized.")
-                // 通知类消息不回复，但我们仍需返回一个对象让流程继续
-                // 实际上不应该推送任何响应。用特殊标记处理。
-                JsonRpcResponse(id = request.id) // id 为 null 的话不会被发送
+            "write_to_file" -> {
+                val path = request.params?.jsonObject?.get("path")?.jsonPrimitive?.contentOrNull
+                val content = request.params?.jsonObject?.get("content")?.jsonPrimitive?.contentOrNull
+                if (path != null && content != null) {
+                    val safePath = "$ALPINE_ROOTFS_PATH/$path"
+                    File(safePath).apply { parentFile.mkdirs() }.writeText(content)
+                    JsonRpcResponse(id = request.id, result = Json.encodeToJsonElement(mapOf("message" to "File written successfully")))
+                } else {
+                    errorResponse(request.id, -32602, "Missing 'path' or 'content'")
+                }
             }
-
-            // ---- 工具列表 ----
-            "tools/list" -> {
-                log("Client requesting tool list...")
-                JsonRpcResponse(
-                    id = request.id,
-                    result = McpTools.buildToolListResult()
-                )
+            "execute_command" -> {
+                val command = request.params?.jsonObject?.get("command")?.jsonPrimitive?.contentOrNull
+                if (command != null) {
+                    val process = ProcessBuilder("proot", "-r", ALPINE_ROOTFS_PATH, "sh", "-c", command)
+                        .redirectErrorStream(true)
+                        .start()
+                    val output = process.inputStream.bufferedReader().readText()
+                    JsonRpcResponse(id = request.id, result = Json.encodeToJsonElement(mapOf("output" to output)))
+                } else {
+                    errorResponse(request.id, -32602, "Missing 'command'")
+                }
             }
-
-            // ---- 工具调用 ----
-            "tools/call" -> {
-                val params = Json.decodeFromJsonElement<CallToolParams>(
-                    request.params ?: return errorResponse(request.id, -32602, "Missing params")
-                )
-                log("Calling tool: ${params.name}")
-
-                val toolResult = toolExecutor.executeTool(params.name, params.arguments)
-                JsonRpcResponse(
-                    id = request.id,
-                    result = toolExecutor.toJsonElement(toolResult)
-                )
-            }
-
-            // ---- 未知方法 ----
-            else -> {
-                log("Unknown method: ${request.method}")
-                errorResponse(request.id, -32601, "Method not found: ${request.method}")
-            }
+            else -> errorResponse(request.id, -32601, "Unknown method: ${request.method}")
         }
     }
 
@@ -313,3 +194,23 @@ class McpService : Service() {
         )
     }
 }
+
+@Serializable
+data class JsonRpcRequest(
+    val id: JsonElement?,
+    val method: String,
+    val params: JsonObject? = null
+)
+
+@Serializable
+data class JsonRpcResponse(
+    val id: JsonElement? = null,
+    val result: JsonElement? = null,
+    val error: JsonRpcError? = null
+)
+
+@Serializable
+data class JsonRpcError(
+    val code: Int,
+    val message: String
+)
