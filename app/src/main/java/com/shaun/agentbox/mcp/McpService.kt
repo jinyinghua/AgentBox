@@ -23,9 +23,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -132,28 +132,32 @@ class McpService : Service() {
                     currentSession = session
                     log("SSE Connected: $sessionId")
 
-                    val heartbeatJob = launch {
-                        while (isActive) {
-                            delay(15000)
-                            try {
-                                send(ServerSentEvent(data = "", event = "ping"))
-                            } catch (e: Exception) { break }
-                        }
-                    }
-
                     try {
-                        send(ServerSentEvent(data = "/message", event = "endpoint"))
+                        // 包含 sessionId 在 endpoint 中以符合规范约定，尽管我们全局复用 session
+                        send(ServerSentEvent(data = "/message?sessionId=$sessionId", event = "endpoint"))
                         
-                        // 使用无限循环从通道读取并发送，增加错误捕获
+                        var lastPing = System.currentTimeMillis()
+                        // 移除独立协程发送心跳，避免由于并发调用 send() 导致底层 Socket Crash 或流损坏
                         while (isActive) {
-                            val response = session.responseChannel.receive()
-                            log("→ SSE Sending Response: ${response.take(50)}...")
-                            send(ServerSentEvent(data = response, event = "message"))
+                            val timeToNextPing = 15000L - (System.currentTimeMillis() - lastPing)
+                            if (timeToNextPing <= 0) {
+                                send(ServerSentEvent(data = "ping", event = "ping"))
+                                lastPing = System.currentTimeMillis()
+                                continue
+                            }
+                            
+                            val response = withTimeoutOrNull(timeToNextPing) {
+                                session.responseChannel.receive()
+                            }
+                            
+                            if (response != null) {
+                                log("→ SSE Sending Response: ${response.take(50)}...")
+                                send(ServerSentEvent(data = response, event = "message"))
+                            }
                         }
                     } catch (e: Exception) {
                         log("SSE Session Error ($sessionId): ${e.message}")
                     } finally {
-                        heartbeatJob.cancel()
                         if (currentSession?.id == sessionId) {
                             currentSession = null
                         }
@@ -184,7 +188,8 @@ class McpService : Service() {
                             }
                         }
                         
-                        call.respond(HttpStatusCode.Accepted, "Accepted")
+                        // MCP 规范要求 POST 请求必须返回 202 Accepted 且 Body 必须为空
+                        call.respondText("", status = HttpStatusCode.Accepted)
                     } catch (e: Exception) {
                         log("POST Parse Error: ${e.message}")
                         call.respond(HttpStatusCode.BadRequest, "Invalid Request")

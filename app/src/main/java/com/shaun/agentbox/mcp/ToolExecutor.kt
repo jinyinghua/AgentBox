@@ -112,11 +112,11 @@ class ToolExecutor(context: Context) {
         }
     }
 
-    private fun readFile(path: String): CallToolResult {
-        return try {
+    private suspend fun readFile(path: String): CallToolResult = withContext(Dispatchers.IO) {
+        try {
             val file = sandboxManager.resolveFile(path)
             if (!file.exists()) {
-                return errorResult("File not found: $path")
+                return@withContext errorResult("File not found: $path")
             }
             if (file.isDirectory) {
                 val listing = file.listFiles()?.joinToString("\n") { entry ->
@@ -143,8 +143,8 @@ class ToolExecutor(context: Context) {
         }
     }
 
-    private fun modifyFile(path: String, content: String): CallToolResult {
-        return try {
+    private suspend fun modifyFile(path: String, content: String): CallToolResult = withContext(Dispatchers.IO) {
+        try {
             val file = sandboxManager.resolveFile(path)
             file.parentFile?.mkdirs()
             file.writeText(content)
