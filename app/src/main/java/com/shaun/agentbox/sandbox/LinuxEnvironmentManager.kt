@@ -1,109 +1,154 @@
 package com.shaun.agentbox.sandbox
 
 import android.content.Context
+import android.os.Build
+import android.system.Os
 import android.util.Log
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URL
-import java.util.zip.GZIPInputStream
 
+/**
+ * Linux 环境管理器 (PRoot + Alpine)
+ * 核心逻辑：下载静态编译的 proot 和 Alpine rootfs，并在 Android 私有目录下构建环境。
+ */
 class LinuxEnvironmentManager(private val context: Context) {
 
     companion object {
-        private const val TAG = "LinuxEnvManager"
-        // 使用静态编译的 proot (来自 termux-packages 或 proot-me)
+        private const val TAG = "LinuxEnv"
+        
+        // 使用 SourceForge 提供的静态编译 proot (aarch64)
         private const val PROOT_URL = "https://sourceforge.net/projects/proot.mirror/files/v5.3.0/proot-v5.3.0-aarch64-static/download"
-        // Alpine Mini Rootfs (ARM64)
+        
+        // 使用清华大学 TUNA 镜像的 Alpine Mini Rootfs (ARM64)
         private const val ROOTFS_URL = "https://mirrors.tuna.tsinghua.edu.cn/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.9-aarch64.tar.gz"
     }
 
     private val systemDir = File(context.filesDir, "system_rootfs")
-    private val binDir = File(context.filesDir, "bin")
-    private val prootFile = File(binDir, "proot")
+    val prootBin = File(systemDir, "proot")
+    val rootfsDir = File(systemDir, "alpine")
 
-    fun isReady(): Boolean {
-        return systemDir.exists() && prootFile.exists()
+    // 检查环境是否完整
+    val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "bin/sh").exists()
+
+    /**
+     * 安装环境 (下载并解压)
+     * @param onProgress 进度回调 (进度值, 状态描述)
+     */
+    suspend fun install(onProgress: (Int, String) -> Unit) = withContext(Dispatchers.IO) {
+        if (isInstalled) {
+            onProgress(100, "Already installed")
+            return@withContext
+        }
+
+        if (!systemDir.exists()) systemDir.mkdirs()
+        if (!rootfsDir.exists()) rootfsDir.mkdirs()
+
+        // 1. 下载 proot
+        onProgress(10, "Downloading proot engine...")
+        downloadFile(PROOT_URL, prootBin)
+        prootBin.setExecutable(true)
+
+        // 2. 下载 Rootfs
+        onProgress(30, "Downloading Alpine Rootfs...")
+        val tarGzFile = File(systemDir, "alpine.tar.gz")
+        downloadFile(ROOTFS_URL, tarGzFile)
+
+        // 3. 解压 (处理 Symlinks)
+        onProgress(60, "Extracting Rootfs (this may take a while)...")
+        extractTarGz(tarGzFile, rootfsDir)
+        tarGzFile.delete()
+
+        // 4. 配置网络 (DNS)
+        onProgress(95, "Configuring DNS...")
+        setupDns()
+
+        onProgress(100, "Installation complete")
     }
 
     /**
-     * 初始化环境：下载并解压必要的组件
+     * 带重定向处理的文件下载逻辑
      */
-    fun setupEnvironment(onProgress: (String) -> Unit, onComplete: (Boolean) -> Unit) {
-        Thread {
-            try {
-                if (!binDir.exists()) binDir.mkdirs()
-                if (!systemDir.exists()) systemDir.mkdirs()
-
-                // 1. 下载 proot
-                if (!prootFile.exists()) {
-                    onProgress("Downloading proot...")
-                    downloadFile(PROOT_URL, prootFile)
-                    prootFile.setExecutable(true)
-                }
-
-                // 2. 下载并解压 Alpine rootfs
-                if (systemDir.list()?.isEmpty() == true) {
-                    onProgress("Downloading and extracting Alpine rootfs...")
-                    val tempFile = File(context.cacheDir, "alpine.tar.gz")
-                    downloadFile(ROOTFS_URL, tempFile)
-                    extractTarGz(tempFile, systemDir)
-                    tempFile.delete()
-                }
-
-                onComplete(true)
-            } catch (e: Exception) {
-                Log.e(TAG, "Setup failed", e)
-                onProgress("Error: ${e.message}")
-                onComplete(false)
+    private fun downloadFile(urlString: String, outFile: File) {
+        var url = URL(urlString)
+        var redirectCount = 0
+        while (redirectCount < 5) {
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            connection.instanceFollowRedirects = false // 手动处理，支持跨协议/域跳转
+            
+            val status = connection.responseCode
+            if (status == java.net.HttpURLConnection.HTTP_MOVED_TEMP || 
+                status == java.net.HttpURLConnection.HTTP_MOVED_PERM || 
+                status == java.net.HttpURLConnection.HTTP_SEE_OTHER) {
+                val newUrl = connection.getHeaderField("Location")
+                url = URL(url, newUrl)
+                redirectCount++
+                continue
             }
-        }.start()
+            
+            connection.inputStream.use { input ->
+                FileOutputStream(outFile).use { output ->
+                    input.copyTo(output)
+                }
+            }
+            break
+        }
     }
 
     /**
-     * 执行命令（在 proot 环境中）
+     * 解压 tar.gz 并还原软链接
      */
-    fun execute(command: String): String {
-        if (!isReady()) return "Environment not ready"
+    private fun extractTarGz(tarGzFile: File, destDir: File) {
+        TarArchiveInputStream(GzipCompressorInputStream(tarGzFile.inputStream())).use { tarInput ->
+            var entry = tarInput.nextTarEntry
+            while (entry != null) {
+                val outFile = File(destDir, entry.name)
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else if (entry.isSymbolicLink) {
+                    try {
+                        // 在 Android 上创建 Linux 软链接
+                        Os.symlink(entry.linkName, outFile.absolutePath)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to create symlink: ${entry.name} -> ${entry.linkName}", e)
+                    }
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { output ->
+                        tarInput.copyTo(output)
+                    }
+                }
+                entry = tarInput.nextTarEntry
+            }
+        }
+    }
 
-        val processBuilder = ProcessBuilder()
-        // 使用 proot 模拟 root 环境并挂载必要的系统目录
-        val fullCommand = listOf(
-            prootFile.absolutePath,
-            "-0", // 模拟 root 用户 (fake root)
-            "-r", systemDir.absolutePath, // 指定新的根目录
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "/sys",
-            "/bin/sh", "-c", command
+    private fun setupDns() {
+        val etcDir = File(rootfsDir, "etc")
+        etcDir.mkdirs()
+        File(etcDir, "resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+    }
+
+    /**
+     * 构造 proot 执行命令
+     */
+    fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {
+        return arrayOf(
+            prootBin.absolutePath,
+            "-0",                                  // 模拟 root 权限
+            "-r", rootfsDir.absolutePath,          // 根目录
+            "-b", "/dev",                          // 挂载设备
+            "-b", "/proc",                         // 挂载进程信息
+            "-b", "/sys",                          // 挂载系统信息
+            "-b", "${workspaceDir.absolutePath}:/workspace", // 挂载 AI 工作区
+            "-w", "/workspace",                    // 设置容器内工作目录
+            "/bin/sh", "-c", userCommand
         )
-
-        processBuilder.command(fullCommand)
-        processBuilder.redirectErrorStream(true)
-
-        return try {
-            val process = processBuilder.start()
-            process.inputStream.bufferedReader().use { it.readText() }
-        } catch (e: Exception) {
-            "Execution failed: ${e.message}"
-        }
-    }
-
-    private fun downloadFile(urlStr: String, destFile: File) {
-        URL(urlStr).openStream().use { input ->
-            FileOutputStream(destFile).use { output ->
-                input.copyTo(output)
-            }
-        }
-    }
-
-    private fun extractTarGz(tarGzFile: File, outputDir: File) {
-        // 在 Android 上，直接使用系统命令解压最简单（通常系统自带 tar）
-        val process = ProcessBuilder()
-            .command("tar", "-xzf", tarGzFile.absolutePath, "-C", outputDir.absolutePath)
-            .start()
-        val exitCode = process.waitFor()
-        if (exitCode != 0) {
-            throw Exception("Tar extraction failed with exit code $exitCode")
-        }
     }
 }
