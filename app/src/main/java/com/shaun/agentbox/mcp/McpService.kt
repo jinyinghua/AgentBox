@@ -22,6 +22,7 @@ import io.ktor.sse.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import java.net.NetworkInterface
@@ -166,7 +167,7 @@ class McpService : Service() {
 
                         // 解析 JSON-RPC 请求并处理
                         val request = Json.decodeFromString(JsonRpcRequest.serializer(), bodyText)
-                        val response = handleRequest(request) // 调用工具执行逻辑
+                        val response = handleRequest(request)
                         val responseJson = Json.encodeToString(JsonRpcResponse.serializer(), response)
 
                         // 推送返回结果到 SSE 会话
@@ -185,20 +186,40 @@ class McpService : Service() {
     }
 
     /**
-     * 处理 JSON-RPC 请求，调用工具执行逻辑。
+     * 处理 JSON-RPC 请求，遵循 MCP 协议。
      */
     private suspend fun handleRequest(request: JsonRpcRequest): JsonRpcResponse {
         return try {
-            val params = request.params?.jsonObject?.let { jsonObject ->
-                jsonObject.mapValues { (_, value) -> value }
-            } ?: emptyMap()
-
-            // 调用 ToolExecutor 执行请求的工具
-            val result = toolExecutor.executeTool(request.method, params)
+            val result: JsonElement? = when (request.method) {
+                "initialize" -> {
+                    McpTools.buildInitializeResult()
+                }
+                "notifications/initialized" -> {
+                    null // 忽略通知，不返回结果
+                }
+                "tools/list" -> {
+                    McpTools.buildToolListResult()
+                }
+                "tools/call" -> {
+                    // 解析 tools/call 参数
+                    val callParams = Json.decodeFromJsonElement<CallToolParams>(request.params ?: throw Exception("Missing params for tools/call"))
+                    val toolResult = toolExecutor.executeTool(callParams.name, callParams.arguments)
+                    Json.encodeToJsonElement(toolResult)
+                }
+                else -> {
+                    // 兼容旧逻辑或直接报错
+                    log("Warning: Received unknown method ${request.method}, trying direct tool execution")
+                    val params = request.params?.jsonObject?.let { jsonObject ->
+                        jsonObject.mapValues { (_, value) -> value }
+                    } ?: emptyMap()
+                    val toolResult = toolExecutor.executeTool(request.method, params)
+                    Json.encodeToJsonElement(toolResult)
+                }
+            }
 
             JsonRpcResponse(
                 id = request.id,
-                result = toolExecutor.toJsonElement(result)
+                result = result
             )
         } catch (e: Exception) {
             log("Error in handleRequest: ${e.message}")
