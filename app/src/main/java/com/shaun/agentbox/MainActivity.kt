@@ -51,21 +51,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
-    /**
-     * 获取本机 IP 地址（替代丢失的 McpService.getLocalIpAddress）。
-     */
-    private fun getLocalIpAddress(): String {
-        return try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
-            interfaces.firstOrNull { it.isUp && !it.isLoopback }?.inetAddresses
-                ?.toList()?.firstOrNull { !it.isLoopbackAddress && it.hostAddress.contains('.') }
-                ?.hostAddress ?: "127.0.0.1"
-        } catch (e: Exception) {
-            Log.e("MainActivity", "Error fetching local IP", e)
-            "127.0.0.1"
-        }
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

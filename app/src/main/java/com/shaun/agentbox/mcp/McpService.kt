@@ -24,6 +24,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
+import java.net.NetworkInterface
 import java.util.UUID
 
 /**
@@ -46,11 +47,26 @@ class McpService : Service() {
             Log.d(TAG, msg)
             onLog?.invoke(msg)
         }
+
+        /**
+         * 获取本机 IP 地址。
+         */
+        fun getLocalIpAddress(): String {
+            return try {
+                val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
+                interfaces.firstOrNull { it.isUp && !it.isLoopback }?.inetAddresses
+                    ?.toList()?.firstOrNull { !it.isLoopbackAddress && it.hostAddress.contains('.') }
+                    ?.hostAddress ?: "127.0.0.1"
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching local IP", e)
+                "127.0.0.1"
+            }
+        }
     }
 
     // 单客户端会话
     private var currentSession: SseSession? = null
-    private var server: CIOApplicationEngine? = null
+    private var server: EmbeddedServer<CIOApplicationEngine, CIOApplicationEngine.Configuration>? = null
     private lateinit var toolExecutor: ToolExecutor // 引用工具执行器
 
     override fun onCreate() {
@@ -95,7 +111,7 @@ class McpService : Service() {
     private fun startForegroundNotification() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("AgentBox MCP Server")
-            .setContentText("Listening at http://127.0.0.1:$PORT/sse")
+            .setContentText("Listening at http://${getLocalIpAddress()}:$PORT/sse")
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setOngoing(true)
             .build()
@@ -105,7 +121,7 @@ class McpService : Service() {
     private fun startServer() {
         if (server != null) return
 
-        server = embeddedServer(CIO, port = PORT, host = "127.0.0.1") {
+        server = embeddedServer(CIO, port = PORT, host = "0.0.0.0") {
             install(SSE)
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
 
@@ -165,7 +181,7 @@ class McpService : Service() {
         }.start(wait = false)
 
         isRunning = true
-        log("MCP Server started at http://127.0.0.1:$PORT/sse")
+        log("MCP Server started at http://${getLocalIpAddress()}:$PORT/sse")
     }
 
     /**
