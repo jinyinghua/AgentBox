@@ -23,7 +23,7 @@ class LinuxEnvironmentManager(private val context: Context) {
         private const val TAG = "LinuxEnv"
         // 对应 assets 中的文件名
         private const val PROOT_ASSET = "proot"
-        private const val ALPINE_ASSET = "alpine.tar.gz"
+        private const val ALPINE_ASSET = "alpine.tar"
     }
 
     private val systemDir = File(context.filesDir, "system_rootfs")
@@ -82,7 +82,7 @@ class LinuxEnvironmentManager(private val context: Context) {
      * 直接从输入流解压 tar.gz
      */
     private fun extractTarGzFromStream(inputStream: InputStream, destDir: File) {
-        TarArchiveInputStream(GzipCompressorInputStream(inputStream)).use { tarInput ->
+        TarArchiveInputStream(inputStream).use { tarInput ->
             var entry = tarInput.nextTarEntry
             while (entry != null) {
                 val outFile = File(destDir, entry.name)
