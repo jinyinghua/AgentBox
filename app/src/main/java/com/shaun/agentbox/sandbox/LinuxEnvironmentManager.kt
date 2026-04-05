@@ -31,7 +31,7 @@ class LinuxEnvironmentManager(private val context: Context) {
     val rootfsDir = File(systemDir, "alpine")
 
     // 检查环境是否完整
-    val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "bin/sh").exists()
+    val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "etc/os-release").exists()
 
     /**
      * 安装环境 (从 Assets 复制并解压)
