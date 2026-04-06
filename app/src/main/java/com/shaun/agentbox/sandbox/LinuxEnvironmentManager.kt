@@ -30,6 +30,13 @@ class LinuxEnvironmentManager(private val context: Context) {
     val prootBin = File(systemDir, "proot")
     val rootfsDir = File(systemDir, "alpine")
 
+    // 获取缓存目录作为 PROOT_TMP_DIR
+    val tmpDir: File get() {
+        val dir = File(context.cacheDir, "proot_tmp")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
     // 检查环境是否完整
     val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "etc/os-release").exists()
 
@@ -65,7 +72,6 @@ class LinuxEnvironmentManager(private val context: Context) {
             onProgress(100, "Installation successful!")
         } catch (e: Exception) {
             Log.e(TAG, "Install failed", e)
-            // 修改这里：抛出更详细的错误（包含完整的类名和堆栈的最顶层信息）
             throw Exception("Asset Error [${e.javaClass.simpleName}]: ${e.message}", e)
         }
     }
@@ -79,7 +85,7 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     /**
-     * 直接从输入流解压 tar.gz
+     * 直接从输入流解压 tar.gz (包含修复执行权限)
      */
     private fun extractTarGzFromStream(inputStream: InputStream, destDir: File) {
         TarArchiveInputStream(inputStream).use { tarInput ->
@@ -99,6 +105,13 @@ class LinuxEnvironmentManager(private val context: Context) {
                     outFile.parentFile?.mkdirs()
                     FileOutputStream(outFile).use { output ->
                         tarInput.copyTo(output)
+                    }
+                    
+                    // 【关键修复】还原可执行权限。
+                    // 0111 (八进制) -> 73 (十进制)，表示只要有执行位，就为其赋予 Android 文件系统的可执行权限。
+                    // 这样 proot 内部才能正常执行 /bin/sh 等基础命令
+                    if ((entry.mode and 73) != 0) {
+                        outFile.setExecutable(true, false)
                     }
                 }
                 entry = tarInput.nextTarEntry

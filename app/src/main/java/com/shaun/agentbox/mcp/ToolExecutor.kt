@@ -73,6 +73,9 @@ class ToolExecutor(context: Context) {
                     .directory(sandboxManager.workspaceDir)
                     .redirectErrorStream(true)
 
+                // 【关键修复】设置 PROOT_TMP_DIR 环境变量，因为 Android 禁止写入系统 /tmp
+                processBuilder.environment()["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+
                 val process = processBuilder.start()
 
                 val output = buildString {
