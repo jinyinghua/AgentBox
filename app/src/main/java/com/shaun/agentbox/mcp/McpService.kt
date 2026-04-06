@@ -22,8 +22,10 @@ import io.ktor.sse.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.decodeFromJsonElement
@@ -34,13 +36,16 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * MCP Server - 修复版：响应直接通过POST响应返回
+ * MCP Server - 终极修复版
  * 
- * MCP SSE传输规范：
- * 1. 客户端建立SSE连接，服务器返回endpoint事件
- * 2. 客户端通过HTTP POST发送请求
- * 3. 对于有id的请求，响应必须通过HTTP POST响应返回（同步）
- * 4. 对于无id的通知，服务器可以异步处理
+ * 问题根源分析：
+ * 1. MCP SSE规范要求：请求通过HTTP POST发送，响应必须通过SSE流异步推送返回。POST本身只应返回202 Accepted。
+ * 2. 客户端SDK(RikkaHub/Kotlin MCP SDK)存在一个行为：它会强行把服务器返回的空内容当作JSON解析，导致崩溃 `unexpected end of the input at path: $ JSON input: `。
+ * 3. 我们之前的代码，要么是在 POST 返回了空内容导致客户端立即崩溃断连（引发Broken pipe），要么是在 SSE ping 里发了空内容导致它15秒后崩溃。
+ * 
+ * 解决方案：
+ * - 恢复通过 SSE 推送结果的正确机制。
+ * - 对于所有原本是空内容的响应（包括POST响应和SSE的ping事件），全部统一塞入一个空的合法JSON对象 `"{}"`，完美避开客户端的解析崩溃！
  */
 class McpService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -133,7 +138,6 @@ class McpService : Service() {
             install(ContentNegotiation) { json(json) }
             
             routing {
-                // SSE端点 - 仅用于服务器主动推送和心跳
                 sse("/sse") {
                     val sessionId = UUID.randomUUID().toString()
                     val session = SseSession(id = sessionId)
@@ -141,21 +145,26 @@ class McpService : Service() {
                     log("SSE Connected: $sessionId (Active: ${sessions.size})")
                     
                     try {
-                        // 告知客户端消息POST终点
                         send(ServerSentEvent(data = "/message?sessionId=$sessionId", event = "endpoint"))
                         
                         var lastPing = System.currentTimeMillis()
                         while (isActive) {
                             val timeToNextPing = 15000L - (System.currentTimeMillis() - lastPing)
                             if (timeToNextPing <= 0) {
-                                // 发送心跳保持连接
-                                send(ServerSentEvent(data = "", event = "ping"))
+                                // 【关键修复1】发送心跳时携带合法的空JSON对象 "{}"，防止客户端强行解析空内容崩溃
+                                send(ServerSentEvent(data = "{}", event = "ping"))
                                 lastPing = System.currentTimeMillis()
                                 continue
                             }
                             
-                            // 等待服务器主动推送的消息（如长时间任务进度）
-                            kotlinx.coroutines.delay(minOf(timeToNextPing, 5000))
+                            val response = withTimeoutOrNull(timeToNextPing) {
+                                session.responseChannel.receive()
+                            }
+                            
+                            if (response != null) {
+                                log("→ SSE Sending Response to $sessionId: ${response.take(50)}...")
+                                send(ServerSentEvent(data = response, event = "message"))
+                            }
                         }
                     } catch (e: Exception) {
                         log("SSE Session Error ($sessionId): ${e.message}")
@@ -165,9 +174,15 @@ class McpService : Service() {
                     }
                 }
                 
-                // POST消息端点 - 处理请求并同步返回响应
                 post("/message") {
                     val sessionId = call.request.queryParameters["sessionId"]
+                    val session = if (sessionId != null) sessions[sessionId] else sessions.values.firstOrNull()
+                    
+                    if (session == null) {
+                        log("Error: POST received for session $sessionId but no SSE active")
+                        call.respondText("{}", ContentType.Application.Json, HttpStatusCode.ServiceUnavailable)
+                        return@post
+                    }
                     
                     try {
                         val bodyText = call.receiveText()
@@ -175,27 +190,24 @@ class McpService : Service() {
                         
                         val request = json.decodeFromString(JsonRpcRequest.serializer(), bodyText)
                         
-                        // 【关键修复】对于有id的请求，同步处理并直接返回响应
-                        if (request.id != null) {
-                            val response = handleRequest(request)
-                            val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
-                            log("→ POST Response: ${responseJson.take(100)}...")
-                            call.respondText(responseJson, ContentType.Application.Json, HttpStatusCode.OK)
-                        } else {
-                            // 对于无id的通知，异步处理
-                            log("Received notification: ${request.method}")
-                            serviceScope.launch {
-                                try {
-                                    handleRequest(request)
-                                } catch (e: Exception) {
-                                    log("Notification error: ${e.message}")
+                        // 异步执行并在SSE通道发送响应
+                        serviceScope.launch {
+                            try {
+                                val response = handleRequest(request)
+                                if (request.id != null) {
+                                    val responseJson = json.encodeToString(JsonRpcResponse.serializer(), response)
+                                    session.responseChannel.send(responseJson)
                                 }
+                            } catch (e: Exception) {
+                                log("Async Task Error: ${e.message}")
                             }
-                            call.respond(HttpStatusCode.NoContent)
                         }
+                        
+                        // 【关键修复2】返回202 Accepted，并携带 "{}"，防止客户端强行把POST返回体当作JSON解析导致崩溃
+                        call.respondText("{}", ContentType.Application.Json, HttpStatusCode.Accepted)
                     } catch (e: Exception) {
                         log("POST Error: ${e.message}")
-                        call.respond(HttpStatusCode.BadRequest, mapOf("error" to (e.message ?: "Invalid request")))
+                        call.respondText("{\"error\":\"Invalid request\"}", ContentType.Application.Json, HttpStatusCode.BadRequest)
                     }
                 }
             }
@@ -218,10 +230,7 @@ class McpService : Service() {
                     val toolResult = toolExecutor.executeTool(callParams.name, callParams.arguments)
                     json.encodeToJsonElement(toolResult)
                 }
-                else -> {
-                    // 未知方法
-                    throw IllegalArgumentException("Unknown method: ${request.method}")
-                }
+                else -> throw IllegalArgumentException("Unknown method: ${request.method}")
             }
             JsonRpcResponse(id = request.id, result = result)
         } catch (e: Exception) {
@@ -233,9 +242,12 @@ class McpService : Service() {
         }
     }
     
-    private data class SseSession(val id: String) {
+    private data class SseSession(
+        val id: String,
+        val responseChannel: Channel<String> = Channel(Channel.UNLIMITED)
+    ) {
         fun cancel() {
-            // 清理资源
+            responseChannel.close()
         }
     }
 }
