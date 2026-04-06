@@ -55,7 +55,7 @@ class LinuxEnvironmentManager(private val context: Context) {
             onProgress(100, "Alpine Linux environment is ready!")
         } catch (e: Exception) {
             Log.e(TAG, "Install failed", e)
-            throw e
+            throw Exception("Asset Error [${e.javaClass.simpleName}]: ${e.message}", e)
         }
     }
 

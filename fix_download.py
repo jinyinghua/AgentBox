@@ -1,5 +1,5 @@
 import os
-f = '/Users/chenhui/androidstudioprojects/agentbox/app/src/main/java/com/shaun/agentbox/sandbox/LinuxEnvironmentManager.kt'
+f = '/workspace/agentbox/app/src/main/java/com/shaun/agentbox/sandbox/LinuxEnvironmentManager.kt'
 with open(f, 'r') as file:
     content = file.read()
 
