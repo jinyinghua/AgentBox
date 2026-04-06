@@ -7,21 +7,17 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 
 /**
- * Linux 环境管理器 (Assets 模式)
- * 核心逻辑：从 APK 内置的 Assets 目录提取 proot 和 Alpine rootfs。
- * 解决了网络环境（403 错误、防火墙等）导致安装失败的问题。
+ * Linux 环境管理器 (升级版：解决权限和环境缺失问题)
  */
 class LinuxEnvironmentManager(private val context: Context) {
 
     companion object {
         private const val TAG = "LinuxEnv"
-        // 对应 assets 中的文件名
         private const val PROOT_ASSET = "proot"
         private const val ALPINE_ASSET = "alpine.tar"
     }
@@ -30,49 +26,36 @@ class LinuxEnvironmentManager(private val context: Context) {
     val prootBin = File(systemDir, "proot")
     val rootfsDir = File(systemDir, "alpine")
 
-    // 获取缓存目录作为 PROOT_TMP_DIR
     val tmpDir: File get() {
         val dir = File(context.cacheDir, "proot_tmp")
         if (!dir.exists()) dir.mkdirs()
         return dir
     }
 
-    // 检查环境是否完整
     val isInstalled: Boolean get() = prootBin.exists() && File(rootfsDir, "etc/os-release").exists()
 
-    /**
-     * 安装环境 (从 Assets 复制并解压)
-     * @param onProgress 进度回调 (进度值, 状态描述)
-     */
     suspend fun install(onProgress: (Int, String) -> Unit) = withContext(Dispatchers.IO) {
         try {
-            if (isInstalled) {
-                onProgress(100, "Already installed")
-                return@withContext
-            }
-
             if (!systemDir.exists()) systemDir.mkdirs()
-            if (!rootfsDir.exists()) rootfsDir.mkdirs()
+            if (rootfsDir.exists()) rootfsDir.deleteRecursively() // 彻底重装以修复旧的权限问题
+            rootfsDir.mkdirs()
 
-            // 1. 提取 proot
-            onProgress(20, "Extracting proot engine from assets...")
+            onProgress(10, "Extracting proot engine...")
             copyAssetToFile(PROOT_ASSET, prootBin)
-            prootBin.setExecutable(true)
+            prootBin.setExecutable(true, false)
 
-            // 2. 解压 Alpine Rootfs (直接从 Assets 流读取，节省存储空间)
-            onProgress(50, "Installing Alpine Rootfs (this may take 1-2 minutes)...")
+            onProgress(30, "Installing Linux Rootfs (Fixing permissions)...")
             context.assets.open(ALPINE_ASSET).use { assetStream ->
                 extractTarGzFromStream(assetStream, rootfsDir)
             }
 
-            // 3. 配置网络 (DNS)
-            onProgress(95, "Finalizing environment...")
+            onProgress(90, "Setting up DNS and Network...")
             setupDns()
 
-            onProgress(100, "Installation successful!")
+            onProgress(100, "Alpine Linux environment is ready!")
         } catch (e: Exception) {
             Log.e(TAG, "Install failed", e)
-            throw Exception("Asset Error [${e.javaClass.simpleName}]: ${e.message}", e)
+            throw e
         }
     }
 
@@ -84,9 +67,6 @@ class LinuxEnvironmentManager(private val context: Context) {
         }
     }
 
-    /**
-     * 直接从输入流解压 tar.gz (包含修复执行权限)
-     */
     private fun extractTarGzFromStream(inputStream: InputStream, destDir: File) {
         TarArchiveInputStream(inputStream).use { tarInput ->
             var entry = tarInput.nextTarEntry
@@ -94,25 +74,28 @@ class LinuxEnvironmentManager(private val context: Context) {
                 val outFile = File(destDir, entry.name)
                 if (entry.isDirectory) {
                     outFile.mkdirs()
+                    // 【修复3】确保目录有写入和进入权限，解决 apk add 权限问题
+                    outFile.setExecutable(true, false)
+                    outFile.setWritable(true, false)
+                    outFile.setReadable(true, false)
                 } else if (entry.isSymbolicLink) {
                     try {
-                        // 在 Android 上创建 Linux 软链接
                         Os.symlink(entry.linkName, outFile.absolutePath)
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed to create symlink: ${entry.name} -> ${entry.linkName}", e)
+                        Log.e(TAG, "Symlink fail: ${entry.name}", e)
                     }
                 } else {
                     outFile.parentFile?.mkdirs()
                     FileOutputStream(outFile).use { output ->
                         tarInput.copyTo(output)
                     }
-                    
-                    // 【关键修复】还原可执行权限。
-                    // 0111 (八进制) -> 73 (十进制)，表示只要有执行位，就为其赋予 Android 文件系统的可执行权限。
-                    // 这样 proot 内部才能正常执行 /bin/sh 等基础命令
+                    // 【修复1】恢复执行权限
                     if ((entry.mode and 73) != 0) {
                         outFile.setExecutable(true, false)
                     }
+                    // 【修复3】确保文件对所有者可写
+                    outFile.setWritable(true, false)
+                    outFile.setReadable(true, false)
                 }
                 entry = tarInput.nextTarEntry
             }
@@ -122,22 +105,24 @@ class LinuxEnvironmentManager(private val context: Context) {
     private fun setupDns() {
         val etcDir = File(rootfsDir, "etc")
         if (!etcDir.exists()) etcDir.mkdirs()
-        File(etcDir, "resolv.conf").writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+        // 增加权限确保 resolv.conf 可被 apk 读取
+        val resolv = File(etcDir, "resolv.conf")
+        resolv.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\n")
+        resolv.setReadable(true, false)
+        resolv.setWritable(true, false)
     }
 
-    /**
-     * 构造 proot 执行命令
-     */
     fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {
         return arrayOf(
             prootBin.absolutePath,
-            "-0",                                  // 模拟 root 权限
-            "-r", rootfsDir.absolutePath,          // 根目录
-            "-b", "/dev",                          // 挂载设备
-            "-b", "/proc",                         // 挂载进程信息
-            "-b", "/sys",                          // 挂载系统信息
-            "-b", "${workspaceDir.absolutePath}:/workspace", // 挂载 AI 工作区
-            "-w", "/workspace",                    // 设置容器内工作目录
+            "-0", // 模拟 Root
+            "-r", rootfsDir.absolutePath,
+            "-b", "/dev",
+            "-b", "/proc",
+            "-b", "/sys",
+            "-b", "/dev/pts", // 增加 pts 挂载支持某些命令
+            "-b", "${workspaceDir.absolutePath}:/workspace",
+            "-w", "/workspace",
             "/bin/sh", "-c", userCommand
         )
     }

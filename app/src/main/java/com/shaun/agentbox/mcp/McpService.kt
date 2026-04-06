@@ -136,7 +136,8 @@ class McpService : Service() {
                     try {
                         send(ServerSentEvent(data = "/message?sessionId=$sessionId", event = "endpoint"))
                         
-                            }
+                        while (isActive) {
+                            val timeToNextPing = 30000L
                             
                             val response = withTimeoutOrNull(timeToNextPing) {
                                 session.responseChannel.receive()

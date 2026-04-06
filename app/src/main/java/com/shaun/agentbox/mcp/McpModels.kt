@@ -12,8 +12,6 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
-// ===================== JSON-RPC 基础结构 =====================
-
 @Serializable
 data class JsonRpcRequest(
     @Required val jsonrpc: String = "2.0",
@@ -37,29 +35,23 @@ data class JsonRpcError(
     val data: JsonElement? = null
 )
 
-// ===================== MCP 协议特有结构 =====================
-
-/** tools/call 请求参数 */
 @Serializable
 data class CallToolParams(
     val name: String,
     val arguments: Map<String, JsonElement> = emptyMap()
 )
 
-/** tools/call 返回结果 (MCP规范) */
 @Serializable
 data class CallToolResult(
     val content: List<ToolContent>,
-    @SerialName("isError") val isError: Boolean // 【修复】去掉默认值，确保 encodeDefaults=false 时也会被编码
+    @SerialName("isError") val isError: Boolean
 )
 
 @Serializable
 data class ToolContent(
-    val type: String, // 【修复】去掉默认值，确保 encodeDefaults=false 时也会被编码（SDK强校验此字段）
+    val type: String,
     val text: String
 )
-
-// ===================== 工具定义构建器 =====================
 
 object McpTools {
 
@@ -73,13 +65,13 @@ object McpTools {
 
     private fun buildExecuteCommandDef() = buildJsonObject {
         put("name", "execute_command")
-        put("description", "Execute a shell command inside the sandbox environment. Returns stdout and stderr. Commands have a 30-second timeout.")
+        put("description", "Execute a shell command in the Alpine Linux sandbox. The environment is persistent. You have full root-like access. Standard Linux tools (ls, grep, cat) are available in PATH. You can install new tools using 'apk add <package>'. Python3 and Git can be installed this way.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("command") {
                     put("type", "string")
-                    put("description", "The shell command to execute")
+                    put("description", "The shell command to execute. Example: 'apk update && apk add python3'")
                 }
             }
             putJsonArray("required") { add(JsonPrimitive("command")) }
@@ -88,13 +80,13 @@ object McpTools {
 
     private fun buildReadFileDef() = buildJsonObject {
         put("name", "read_file")
-        put("description", "Read the content of a file in the sandbox workspace. Path is relative to workspace root.")
+        put("description", "Read a file from the workspace. Path is relative to /workspace.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("path") {
                     put("type", "string")
-                    put("description", "Relative path to the file from workspace root")
+                    put("description", "Relative path to file")
                 }
             }
             putJsonArray("required") { add(JsonPrimitive("path")) }
@@ -103,17 +95,17 @@ object McpTools {
 
     private fun buildModifyFileDef() = buildJsonObject {
         put("name", "modify_file")
-        put("description", "Create or overwrite a file in the sandbox workspace. Parent directories are created automatically. Path is relative to workspace root.")
+        put("description", "Create or edit a file in the /workspace.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("path") {
                     put("type", "string")
-                    put("description", "Relative path to the file from workspace root")
+                    put("description", "Relative path to file")
                 }
                 putJsonObject("content") {
                     put("type", "string")
-                    put("description", "The content to write to the file")
+                    put("description", "New content of the file")
                 }
             }
             putJsonArray("required") {
@@ -122,8 +114,6 @@ object McpTools {
             }
         }
     }
-
-    // ===================== 服务器信息 =====================
 
     fun buildInitializeResult(): JsonElement = buildJsonObject {
         put("protocolVersion", "2024-11-05")
@@ -134,7 +124,7 @@ object McpTools {
         }
         putJsonObject("serverInfo") {
             put("name", "AgentBox")
-            put("version", "1.0.0")
+            put("version", "1.1.0")
         }
     }
 }

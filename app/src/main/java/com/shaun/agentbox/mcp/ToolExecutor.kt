@@ -14,7 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 /**
- * MCP Tool 执行器 (接入 Plan B: Linux Container)
+ * MCP Tool 执行器 (升级版：注入完整环境变量)
  */
 class ToolExecutor(context: Context) {
 
@@ -22,11 +22,12 @@ class ToolExecutor(context: Context) {
     private val linuxManager = LinuxEnvironmentManager(context)
     private val json = Json { ignoreUnknownKeys = true }
 
-    val workspaceDir: File get() = sandboxManager.workspaceDir
-
     companion object {
-        private const val COMMAND_TIMEOUT_MS = 30_000L
+        private const val COMMAND_TIMEOUT_MS = 60_000L // 增加到 60s 以便 apk 安装软件
         private const val MAX_OUTPUT_LENGTH = 100_000
+        
+        // 【修复1】标准的 Linux PATH
+        private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
 
     suspend fun executeTool(name: String, arguments: Map<String, JsonElement>): CallToolResult {
@@ -52,29 +53,27 @@ class ToolExecutor(context: Context) {
         }
     }
 
-    fun toJsonElement(result: CallToolResult): JsonElement {
-        return json.encodeToJsonElement(result)
-    }
-
-    // ===================== Tool 实现 (Plan B: Proot 模式) =====================
-
     private suspend fun executeCommand(command: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
-            // 检查环境是否就绪
             if (!linuxManager.isInstalled) {
                 return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
             }
 
             withTimeout(COMMAND_TIMEOUT_MS) {
-                // 核心：使用 proot 封装命令
                 val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
 
                 val processBuilder = ProcessBuilder(*prootCmd)
                     .directory(sandboxManager.workspaceDir)
                     .redirectErrorStream(true)
 
-                // 【关键修复】设置 PROOT_TMP_DIR 环境变量，因为 Android 禁止写入系统 /tmp
-                processBuilder.environment()["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+                // 【修复1 & 3】注入核心环境变量
+                val env = processBuilder.environment()
+                env["PATH"] = LINUX_PATH
+                env["HOME"] = "/root"
+                env["USER"] = "root"
+                env["LOGNAME"] = "root"
+                env["TERM"] = "xterm-256color"
+                env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
 
                 val process = processBuilder.start()
 
@@ -87,9 +86,6 @@ class ToolExecutor(context: Context) {
                             totalRead += read
                             if (totalRead <= MAX_OUTPUT_LENGTH) {
                                 append(buffer, 0, read)
-                            } else {
-                                append("\n\n... [OUTPUT TRUNCATED] ...")
-                                break
                             }
                         }
                     }
@@ -97,55 +93,33 @@ class ToolExecutor(context: Context) {
 
                 val exitCode = process.waitFor()
 
-                val resultText = buildString {
-                    append(output)
-                    if (isNotEmpty() && !endsWith('\n')) append('\n')
-                    append("[exit code: $exitCode]")
-                }
-
                 CallToolResult(
-                    content = listOf(ToolContent(type = "text", text = resultText)),
+                    content = listOf(ToolContent(type = "text", text = output + "\n[exit code: $exitCode]")),
                     isError = exitCode != 0
                 )
             }
-        } catch (e: TimeoutCancellationException) {
-            errorResult("Command timed out after ${COMMAND_TIMEOUT_MS / 1000}s: $command")
         } catch (e: Exception) {
-            errorResult("Command execution failed: ${e.message}")
+            errorResult("Execution failed: ${e.message}")
         }
     }
 
     private suspend fun readFile(path: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
             val file = sandboxManager.resolveFile(path)
-            if (!file.exists()) {
-                return@withContext errorResult("File not found: $path")
-            }
-            if (file.isDirectory) {
-                val listing = file.listFiles()?.joinToString("\n") { entry ->
-                    val type = if (entry.isDirectory) "[DIR]" else "[FILE ${entry.length()}B]"
-                    "$type ${entry.name}"
-                } ?: "(empty directory)"
-                CallToolResult(
-                    content = listOf(ToolContent(type = "text", text = listing)),
-                    isError = false
-                )
+            if (!file.exists()) return@withContext errorResult("File not found: $path")
+            
+            val content = if (file.isDirectory) {
+                file.listFiles()?.joinToString("\n") { it.name } ?: "(empty)"
             } else {
-                val content = file.readText()
-                val finalContent = if (content.length > MAX_OUTPUT_LENGTH) {
-                    content.take(MAX_OUTPUT_LENGTH) + "\n\n... [FILE TRUNCATED] ..."
-                } else {
-                    content
-                }
-                CallToolResult(
-                    content = listOf(ToolContent(type = "text", text = finalContent)),
-                    isError = false
-                )
+                file.readText()
             }
-        } catch (e: SecurityException) {
-            errorResult("Access denied (sandbox escape blocked): $path")
+            
+            CallToolResult(
+                content = listOf(ToolContent(type = "text", text = content)),
+                isError = false
+            )
         } catch (e: Exception) {
-            errorResult("Failed to read file: ${e.message}")
+            errorResult("Read failed: ${e.message}")
         }
     }
 
@@ -158,10 +132,8 @@ class ToolExecutor(context: Context) {
                 content = listOf(ToolContent(type = "text", text = "Successfully written to $path")),
                 isError = false
             )
-        } catch (e: SecurityException) {
-            errorResult("Access denied (sandbox escape blocked): $path")
         } catch (e: Exception) {
-            errorResult("Failed to write file: ${e.message}")
+            errorResult("Write failed: ${e.message}")
         }
     }
 
