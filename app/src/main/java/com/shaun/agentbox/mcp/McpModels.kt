@@ -50,12 +50,12 @@ data class CallToolParams(
 @Serializable
 data class CallToolResult(
     val content: List<ToolContent>,
-    @SerialName("isError") val isError: Boolean = false
+    @SerialName("isError") val isError: Boolean // 【修复】去掉默认值，确保 encodeDefaults=false 时也会被编码
 )
 
 @Serializable
 data class ToolContent(
-    val type: String = "text",
+    val type: String, // 【修复】去掉默认值，确保 encodeDefaults=false 时也会被编码（SDK强校验此字段）
     val text: String
 )
 

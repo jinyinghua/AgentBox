@@ -101,7 +101,7 @@ class ToolExecutor(context: Context) {
                 }
 
                 CallToolResult(
-                    content = listOf(ToolContent(text = resultText)),
+                    content = listOf(ToolContent(type = "text", text = resultText)),
                     isError = exitCode != 0
                 )
             }
@@ -123,18 +123,21 @@ class ToolExecutor(context: Context) {
                     val type = if (entry.isDirectory) "[DIR]" else "[FILE ${entry.length()}B]"
                     "$type ${entry.name}"
                 } ?: "(empty directory)"
-                CallToolResult(content = listOf(ToolContent(text = listing)))
+                CallToolResult(
+                    content = listOf(ToolContent(type = "text", text = listing)),
+                    isError = false
+                )
             } else {
                 val content = file.readText()
-                if (content.length > MAX_OUTPUT_LENGTH) {
-                    CallToolResult(
-                        content = listOf(
-                            ToolContent(text = content.take(MAX_OUTPUT_LENGTH) + "\n\n... [FILE TRUNCATED] ...")
-                        )
-                    )
+                val finalContent = if (content.length > MAX_OUTPUT_LENGTH) {
+                    content.take(MAX_OUTPUT_LENGTH) + "\n\n... [FILE TRUNCATED] ..."
                 } else {
-                    CallToolResult(content = listOf(ToolContent(text = content)))
+                    content
                 }
+                CallToolResult(
+                    content = listOf(ToolContent(type = "text", text = finalContent)),
+                    isError = false
+                )
             }
         } catch (e: SecurityException) {
             errorResult("Access denied (sandbox escape blocked): $path")
@@ -149,7 +152,8 @@ class ToolExecutor(context: Context) {
             file.parentFile?.mkdirs()
             file.writeText(content)
             CallToolResult(
-                content = listOf(ToolContent(text = "Successfully written to $path"))
+                content = listOf(ToolContent(type = "text", text = "Successfully written to $path")),
+                isError = false
             )
         } catch (e: SecurityException) {
             errorResult("Access denied (sandbox escape blocked): $path")
@@ -159,7 +163,7 @@ class ToolExecutor(context: Context) {
     }
 
     private fun errorResult(message: String) = CallToolResult(
-        content = listOf(ToolContent(text = message)),
+        content = listOf(ToolContent(type = "text", text = message)),
         isError = true
     )
 }

@@ -35,18 +35,7 @@ import java.net.NetworkInterface
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
-/**
- * MCP Server - 终极修复版
- * 
- * 问题根源分析：
- * 1. MCP SSE规范要求：请求通过HTTP POST发送，响应必须通过SSE流异步推送返回。POST本身只应返回202 Accepted。
- * 2. 客户端SDK(RikkaHub/Kotlin MCP SDK)存在一个行为：它会强行把服务器返回的空内容当作JSON解析，导致崩溃 `unexpected end of the input at path: $ JSON input: `。
- * 3. 我们之前的代码，要么是在 POST 返回了空内容导致客户端立即崩溃断连（引发Broken pipe），要么是在 SSE ping 里发了空内容导致它15秒后崩溃。
- * 
- * 解决方案：
- * - 恢复通过 SSE 推送结果的正确机制。
- * - 对于所有原本是空内容的响应（包括POST响应和SSE的ping事件），全部统一塞入一个空的合法JSON对象 `"{}"`，完美避开客户端的解析崩溃！
- */
+
 class McpService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val json = Json {
