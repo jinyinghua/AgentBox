@@ -136,14 +136,6 @@ class McpService : Service() {
                     try {
                         send(ServerSentEvent(data = "/message?sessionId=$sessionId", event = "endpoint"))
                         
-                        var lastPing = System.currentTimeMillis()
-                        while (isActive) {
-                            val timeToNextPing = 15000L - (System.currentTimeMillis() - lastPing)
-                            if (timeToNextPing <= 0) {
-                                // 【关键修复1】发送心跳时携带合法的空JSON对象 "{}"，防止客户端强行解析空内容崩溃
-                                send(ServerSentEvent(data = "{}", event = "ping"))
-                                lastPing = System.currentTimeMillis()
-                                continue
                             }
                             
                             val response = withTimeoutOrNull(timeToNextPing) {
