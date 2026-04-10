@@ -3,6 +3,9 @@ package com.shaun.agentbox
 import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.provider.Settings
+import android.net.Uri
+import com.shaun.agentbox.ui.FloatingWindowService
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -67,11 +70,13 @@ fun AgentBoxApp() {
     var isInstalling by remember { mutableStateOf(false) }
 
     var isRunning by remember { mutableStateOf(McpService.isRunning) }
+    var isFloatingRunning by remember { mutableStateOf(FloatingWindowService.isRunning) }
     var serverAddress by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         while (true) {
             isRunning = McpService.isRunning
+            isFloatingRunning = FloatingWindowService.isRunning
             if (isRunning) {
                 serverAddress = "http://${McpService.getLocalIpAddress()}:${McpService.PORT}/sse"
             }
@@ -211,12 +216,33 @@ fun AgentBoxApp() {
                                 Text(serverAddress, style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                             }
                         }
-                        FilledTonalButton(onClick = {
-                            val intent = Intent(context, McpService::class.java)
-                            if (isRunning) context.stopService(intent) else context.startForegroundService(intent)
-                        }, enabled = envInstalled) {
-                            Icon(if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow, null)
-                            Text(if (isRunning) "Stop" else "Start")
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = {
+                                if (!Settings.canDrawOverlays(context)) {
+                                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:${context.packageName}"))
+                                    context.startActivity(intent)
+                                } else {
+                                    val intent = Intent(context, FloatingWindowService::class.java)
+                                    if (isFloatingRunning) {
+                                        context.stopService(intent)
+                                    } else {
+                                        context.startForegroundService(intent)
+                                    }
+                                }
+                            }) {
+                                Icon(if (isFloatingRunning) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Float")
+                            }
+
+                            FilledTonalButton(onClick = {
+                                val intent = Intent(context, McpService::class.java)
+                                if (isRunning) context.stopService(intent) else context.startForegroundService(intent)
+                            }, enabled = envInstalled) {
+                                Icon(if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow, null)
+                                Spacer(Modifier.width(4.dp))
+                                Text(if (isRunning) "Stop" else "Start")
+                            }
                         }
                     }
                 }
