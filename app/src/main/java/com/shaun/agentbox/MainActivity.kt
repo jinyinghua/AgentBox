@@ -8,7 +8,9 @@ import android.net.Uri
 import com.shaun.agentbox.ui.FloatingWindowService
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -34,6 +36,7 @@ import androidx.core.content.FileProvider
 import com.shaun.agentbox.mcp.McpService
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
+import com.shaun.agentbox.sandbox.SandboxBackupManager
 import com.shaun.agentbox.ui.theme.AgentBoxTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -63,6 +66,7 @@ fun AgentBoxApp() {
     val scope = rememberCoroutineScope()
     val sandboxManager = remember { SandboxManager(context) }
     val linuxManager = remember { LinuxEnvironmentManager(context) }
+    val backupManager = remember { SandboxBackupManager(context) }
 
     var envInstalled by remember { mutableStateOf(linuxManager.isInstalled) }
     var installProgress by remember { mutableIntStateOf(0) }
@@ -104,7 +108,56 @@ fun AgentBoxApp() {
         onDispose { McpService.onLog = null }
     }
     var showLog by remember { mutableStateOf(false) }
-    var isExporting by remember { mutableStateOf(false) }
+    
+    // Backup/Restore State
+    var backupProgress by remember { mutableIntStateOf(-1) }
+    var backupStatus by remember { mutableStateOf("") }
+
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/gzip")) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    backupProgress = 0
+                    context.contentResolver.openOutputStream(it)?.use { os ->
+                        backupManager.exportFullBackup(os) { p, s ->
+                            backupProgress = p
+                            backupStatus = s
+                        }
+                    }
+                    Toast.makeText(context, "Export Successful", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Export Failed: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    backupProgress = -1
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let {
+            scope.launch {
+                try {
+                    backupProgress = 0
+                    context.contentResolver.openInputStream(it)?.use { isStream ->
+                        backupManager.importFullBackup(isStream) { p, s ->
+                            backupProgress = p
+                            backupStatus = s
+                        }
+                    }
+                    envInstalled = linuxManager.isInstalled
+                    refreshTrigger++
+                    Toast.makeText(context, "Import Successful", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Import Failed: ${e.message}", Toast.LENGTH_LONG).show()
+                } finally {
+                    backupProgress = -1
+                }
+            }
+        }
+    }
+
+    var showMenu by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -131,33 +184,65 @@ fun AgentBoxApp() {
                     IconButton(onClick = { showLog = !showLog }) {
                         Icon(if (showLog) Icons.Default.Folder else Icons.Default.Terminal, contentDescription = null)
                     }
-                    IconButton(
-                        onClick = {
-                            if (!isExporting) {
-                                isExporting = true
-                                scope.launch {
-                                    try {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
+                        }
+                        DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Share Workspace (Zip)") },
+                                onClick = {
+                                    showMenu = false
+                                    scope.launch {
                                         val zipFile = withContext(Dispatchers.IO) {
-                                            val f = File(context.cacheDir, "export_${System.currentTimeMillis()}.zip")
+                                            val f = File(context.cacheDir, "workspace_${System.currentTimeMillis()}.zip")
                                             sandboxManager.zipWorkspace(f); f
                                         }
                                         val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", zipFile)
                                         context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                                             type = "application/zip"; putExtra(Intent.EXTRA_STREAM, uri)
                                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }, "Export Workspace"))
-                                    } finally { isExporting = false }
-                                }
-                            }
+                                        }, "Share Workspace"))
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.Share, null) }
+                            )
+                            Divider()
+                            DropdownMenuItem(
+                                text = { Text("Export Full Backup (.tar.gz)") },
+                                onClick = {
+                                    showMenu = false
+                                    exportLauncher.launch("agentbox_backup_${SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(Date())}.tar.gz")
+                                },
+                                leadingIcon = { Icon(Icons.Default.Backup, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Import Full Backup (.tar.gz)") },
+                                onClick = {
+                                    showMenu = false
+                                    importLauncher.launch(arrayOf("application/gzip", "application/x-gzip", "application/octet-stream"))
+                                },
+                                leadingIcon = { Icon(Icons.Default.Restore, null) }
+                            )
                         }
-                    ) { if (isExporting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Share, contentDescription = null) }
+                    }
                 }
             )
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp) {
                 Column {
-                    if (!envInstalled) {
+                    if (backupProgress >= 0) {
+                        LinearProgressIndicator(
+                            progress = { backupProgress / 100f },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = backupStatus,
+                            modifier = Modifier.padding(8.dp),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    } else if (!envInstalled) {
                         LinearProgressIndicator(
                             progress = { installProgress / 100f },
                             modifier = Modifier.fillMaxWidth(),
@@ -185,7 +270,7 @@ fun AgentBoxApp() {
                                                 Toast.makeText(context, "✅ Linux Env Installed!", Toast.LENGTH_SHORT).show()
                                             } catch (e: Exception) {
                                                 installStatus = "Error: ${e.message}"
-                                                android.util.Log.e("AgentBox", "Install failed", e)
+                                                Log.e("AgentBox", "Install failed", e)
                                                 Toast.makeText(context, "❌ Install failed: ${e.message}", Toast.LENGTH_LONG).show()
                                             } finally {
                                                 isInstalling = false
