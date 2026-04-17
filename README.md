@@ -54,4 +54,4 @@ The project includes several utility scripts for maintaining the MCP implementat
 
 ## 📄 License
 
-[Insert License Information Here, e.g., MIT]
+MIT
