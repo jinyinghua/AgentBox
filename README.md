@@ -21,10 +21,9 @@ AgentBox is a powerful Android application that provides a sandboxed Linux envir
 
 ## 📂 Project Structure
 
-- `agentbox/`: The main Android application source code.
-    - `app/src/main/java/.../mcp/`: MCP protocol implementation and tool execution logic.
-    - `app/src/main/java/.../sandbox/`: Linux environment management (Alpine/proot).
-    - `app/src/main/java/.../ui/`: Compose-based UI components and Floating Window service.
+- `app/src/main/java/.../mcp/`: MCP protocol implementation and tool execution logic.
+- `app/src/main/java/.../sandbox/`: Linux environment management (Alpine/proot).
+- `app/src/main/java/.../ui/`: Compose-based UI components and Floating Window service.
 - `workspace/`: Default directory for agent operations and file storage.
 - `scripts/`: Maintenance scripts for code updates and environment setup.
 
