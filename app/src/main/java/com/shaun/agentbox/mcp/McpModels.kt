@@ -60,6 +60,7 @@ object McpTools {
             add(buildExecuteCommandDef())
             add(buildReadFileDef())
             add(buildModifyFileDef())
+            add(buildAskAiTeacherDef())
         }
     }
 
@@ -127,4 +128,24 @@ object McpTools {
             put("version", "1.1.0")
         }
     }
+
+    private fun buildAskAiTeacherDef() = buildJsonObject {
+        put("name", "ask_ai_teacher")
+        put("description", "Ask the AI teacher a question. If continuing a conversation, provide the session id.")
+        putJsonObject("inputSchema") {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("content") {
+                    put("type", "string")
+                    put("description", "The question or message for the AI teacher")
+                }
+                putJsonObject("id") {
+                    put("type", "string")
+                    put("description", "Optional session ID to continue a conversation")
+                }
+            }
+            putJsonArray("required") { add(JsonPrimitive("content")) }
+        }
+    }
+
 }

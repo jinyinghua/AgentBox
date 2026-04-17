@@ -7,7 +7,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonPrimitive
@@ -21,6 +25,7 @@ class ToolExecutor(context: Context) {
     private val sandboxManager = SandboxManager(context)
     private val linuxManager = LinuxEnvironmentManager(context)
     private val json = Json { ignoreUnknownKeys = true }
+    private val teacherManager = AiTeacherManager(context)
 
     companion object {
         private const val COMMAND_TIMEOUT_MS = 60_000L // 增加到 60s 以便 apk 安装软件
@@ -48,6 +53,13 @@ class ToolExecutor(context: Context) {
                 val content = arguments["content"]?.jsonPrimitive?.content
                     ?: return errorResult("Missing required argument: content")
                 modifyFile(path, content)
+            }
+            
+            "ask_ai_teacher" -> {
+                val content = arguments["content"]?.jsonPrimitive?.content
+                    ?: return errorResult("Missing required argument: content")
+                val id = arguments["id"]?.jsonPrimitive?.content
+                askAiTeacher(content, id)
             }
             else -> errorResult("Unknown tool: $name")
         }
@@ -141,4 +153,22 @@ class ToolExecutor(context: Context) {
         content = listOf(ToolContent(type = "text", text = message)),
         isError = true
     )
+
+    private suspend fun askAiTeacher(content: String, id: String?): CallToolResult = withContext(Dispatchers.IO) {
+        try {
+            val (sessionId, reply) = teacherManager.askTeacher(content, id)
+            val resultText = buildJsonObject {
+                put("id", sessionId)
+                put("reply", reply)
+            }.toString()
+            
+            CallToolResult(
+                content = listOf(ToolContent(type = "text", text = resultText)),
+                isError = false
+            )
+        } catch (e: Exception) {
+            errorResult("Ask AI Teacher failed: ${e.message}")
+        }
+    }
+
 }
