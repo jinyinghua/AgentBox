@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -29,11 +30,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.shaun.agentbox.mcp.McpService
+import com.shaun.agentbox.mcp.AiTeacherManager
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
 import com.shaun.agentbox.sandbox.SandboxBackupManager
@@ -51,11 +56,7 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent {
-            AgentBoxTheme {
-                AgentBoxApp()
-            }
-        }
+        setContent { AgentBoxTheme { AgentBoxApp() } }
     }
 }
 
@@ -67,15 +68,16 @@ fun AgentBoxApp() {
     val sandboxManager = remember { SandboxManager(context) }
     val linuxManager = remember { LinuxEnvironmentManager(context) }
     val backupManager = remember { SandboxBackupManager(context) }
+    val aiTeacherManager = remember { AiTeacherManager(context) }
 
     var envInstalled by remember { mutableStateOf(linuxManager.isInstalled) }
     var installProgress by remember { mutableIntStateOf(0) }
     var installStatus by remember { mutableStateOf("") }
     var isInstalling by remember { mutableStateOf(false) }
-
     var isRunning by remember { mutableStateOf(McpService.isRunning) }
     var isFloatingRunning by remember { mutableStateOf(FloatingWindowService.isRunning) }
     var serverAddress by remember { mutableStateOf("") }
+    var showSettings by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -91,7 +93,6 @@ fun AgentBoxApp() {
     var currentRelativePath by remember { mutableStateOf("") }
     var currentFiles by remember { mutableStateOf<List<File>>(emptyList()) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
-
     LaunchedEffect(currentRelativePath, refreshTrigger) {
         val dir = if (currentRelativePath.isEmpty()) {
             sandboxManager.workspaceDir
@@ -108,7 +109,7 @@ fun AgentBoxApp() {
         onDispose { McpService.onLog = null }
     }
     var showLog by remember { mutableStateOf(false) }
-    
+
     // Backup/Restore State
     var backupProgress by remember { mutableIntStateOf(-1) }
     var backupStatus by remember { mutableStateOf("") }
@@ -119,17 +120,12 @@ fun AgentBoxApp() {
                 try {
                     backupProgress = 0
                     context.contentResolver.openOutputStream(it)?.use { os ->
-                        backupManager.exportFullBackup(os) { p, s ->
-                            backupProgress = p
-                            backupStatus = s
-                        }
+                        backupManager.exportFullBackup(os) { p, s -> backupProgress = p; backupStatus = s }
                     }
                     Toast.makeText(context, "Export Successful", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(context, "Export Failed: ${e.message}", Toast.LENGTH_LONG).show()
-                } finally {
-                    backupProgress = -1
-                }
+                } finally { backupProgress = -1 }
             }
         }
     }
@@ -140,24 +136,28 @@ fun AgentBoxApp() {
                 try {
                     backupProgress = 0
                     context.contentResolver.openInputStream(it)?.use { isStream ->
-                        backupManager.importFullBackup(isStream) { p, s ->
-                            backupProgress = p
-                            backupStatus = s
-                        }
+                        backupManager.importFullBackup(isStream) { p, s -> backupProgress = p; backupStatus = s }
                     }
                     envInstalled = linuxManager.isInstalled
                     refreshTrigger++
                     Toast.makeText(context, "Import Successful", Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     Toast.makeText(context, "Import Failed: ${e.message}", Toast.LENGTH_LONG).show()
-                } finally {
-                    backupProgress = -1
-                }
+                } finally { backupProgress = -1 }
             }
         }
     }
 
     var showMenu by remember { mutableStateOf(false) }
+
+    // Settings Screen
+    if (showSettings) {
+        AiTeacherSettingsScreen(
+            manager = aiTeacherManager,
+            onBack = { showSettings = false }
+        )
+        return@AgentBoxApp
+    }
 
     Scaffold(
         topBar = {
@@ -168,7 +168,8 @@ fun AgentBoxApp() {
                         Text(
                             if (currentRelativePath.isEmpty()) "/" else "/$currentRelativePath",
                             style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 },
@@ -185,10 +186,14 @@ fun AgentBoxApp() {
                         Icon(if (showLog) Icons.Default.Folder else Icons.Default.Terminal, contentDescription = null)
                     }
                     Box {
-                        IconButton(onClick = { showMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Menu")
-                        }
+                        IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu") }
                         DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                            DropdownMenuItem(
+                                text = { Text("AI Teacher Settings") },
+                                onClick = { showMenu = false; showSettings = true },
+                                leadingIcon = { Icon(Icons.Default.School, null) }
+                            )
+                            Divider()
                             DropdownMenuItem(
                                 text = { Text("Share Workspace (Zip)") },
                                 onClick = {
@@ -233,20 +238,10 @@ fun AgentBoxApp() {
             Surface(tonalElevation = 3.dp) {
                 Column {
                     if (backupProgress >= 0) {
-                        LinearProgressIndicator(
-                            progress = { backupProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            text = backupStatus,
-                            modifier = Modifier.padding(8.dp),
-                            style = MaterialTheme.typography.labelSmall
-                        )
+                        LinearProgressIndicator(progress = { backupProgress / 100f }, modifier = Modifier.fillMaxWidth())
+                        Text(text = backupStatus, modifier = Modifier.padding(8.dp), style = MaterialTheme.typography.labelSmall)
                     } else if (!envInstalled) {
-                        LinearProgressIndicator(
-                            progress = { installProgress / 100f },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        LinearProgressIndicator(progress = { installProgress / 100f }, modifier = Modifier.fillMaxWidth())
                         Row(
                             modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.errorContainer).padding(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
@@ -263,29 +258,22 @@ fun AgentBoxApp() {
                                         isInstalling = true
                                         scope.launch {
                                             try {
-                                                linuxManager.install { p, s ->
-                                                    installProgress = p; installStatus = s
-                                                }
+                                                linuxManager.install { p, s -> installProgress = p; installStatus = s }
                                                 envInstalled = linuxManager.isInstalled
                                                 Toast.makeText(context, "✅ Linux Env Installed!", Toast.LENGTH_SHORT).show()
                                             } catch (e: Exception) {
                                                 installStatus = "Error: ${e.message}"
                                                 Log.e("AgentBox", "Install failed", e)
                                                 Toast.makeText(context, "❌ Install failed: ${e.message}", Toast.LENGTH_LONG).show()
-                                            } finally {
-                                                isInstalling = false
-                                            }
+                                            } finally { isInstalling = false }
                                         }
                                     },
                                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
                                     modifier = Modifier.height(28.dp)
-                                ) {
-                                    Text("Install", style = MaterialTheme.typography.labelSmall)
-                                }
+                                ) { Text("Install", style = MaterialTheme.typography.labelSmall) }
                             }
                         }
                     }
-
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -308,22 +296,20 @@ fun AgentBoxApp() {
                                     context.startActivity(intent)
                                 } else {
                                     val intent = Intent(context, FloatingWindowService::class.java)
-                                    if (isFloatingRunning) {
-                                        context.stopService(intent)
-                                    } else {
-                                        context.startForegroundService(intent)
-                                    }
+                                    if (isFloatingRunning) context.stopService(intent) else context.startForegroundService(intent)
                                 }
                             }) {
                                 Icon(if (isFloatingRunning) Icons.Default.VisibilityOff else Icons.Default.Visibility, null)
                                 Spacer(Modifier.width(4.dp))
                                 Text("Float")
                             }
-
-                            FilledTonalButton(onClick = {
-                                val intent = Intent(context, McpService::class.java)
-                                if (isRunning) context.stopService(intent) else context.startForegroundService(intent)
-                            }, enabled = envInstalled) {
+                            FilledTonalButton(
+                                onClick = {
+                                    val intent = Intent(context, McpService::class.java)
+                                    if (isRunning) context.stopService(intent) else context.startForegroundService(intent)
+                                },
+                                enabled = envInstalled
+                            ) {
                                 Icon(if (isRunning) Icons.Default.Stop else Icons.Default.PlayArrow, null)
                                 Spacer(Modifier.width(4.dp))
                                 Text(if (isRunning) "Stop" else "Start")
@@ -344,10 +330,146 @@ fun AgentBoxApp() {
             } else {
                 LazyColumn(Modifier.padding(padding).fillMaxSize()) {
                     items(currentFiles, key = { it.absolutePath }) { file ->
-                        FileListItem(file = file, onClick = { if (file.isDirectory) currentRelativePath = if (currentRelativePath.isEmpty()) file.name else "$currentRelativePath/${file.name}" })
+                        FileListItem(file = file, onClick = {
+                            if (file.isDirectory) {
+                                currentRelativePath = if (currentRelativePath.isEmpty()) file.name else "$currentRelativePath/${file.name}"
+                            }
+                        })
                     }
                 }
             }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AiTeacherSettingsScreen(
+    manager: AiTeacherManager,
+    onBack: () -> Unit
+) {
+    var endpoint by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf("") }
+    var showApiKey by remember { mutableStateOf(false) }
+    var isSaved by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val config = manager.loadConfig()
+        endpoint = config.endpoint
+        apiKey = config.apiKey
+        model = config.model
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("AI Teacher Settings") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            OutlinedTextField(
+                value = endpoint,
+                onValueChange = { endpoint = it; isSaved = false },
+                label = { Text("API Endpoint") },
+                placeholder = { Text("https://api.openai.com/v1/chat/completions") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it; isSaved = false },
+                label = { Text("API Key") },
+                placeholder = { Text("sk-...") },
+                singleLine = true,
+                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showApiKey = !showApiKey }) {
+                        Icon(
+                            if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showApiKey) "Hide" else "Show"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it; isSaved = false },
+                label = { Text("Model Name") },
+                placeholder = { Text("gpt-4o") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Button(
+                onClick = {
+                    manager.saveConfig(com.shaun.agentbox.mcp.AiTeacherConfig(endpoint, apiKey, model))
+                    isSaved = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = endpoint.isNotEmpty() && apiKey.isNotEmpty() && model.isNotEmpty()
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Save Configuration")
+            }
+
+            if (isSaved) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Configuration saved!", color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            HorizontalDivider()
+
+            Text(
+                "The AI Teacher allows the sandboxed AI to ask questions to a more powerful model. Configure your OpenAI-compatible API above.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Text(
+                "Config file location:",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                manager.loadConfig().let { "ai_teacher_config.json" },
+                style = MaterialTheme.typography.bodySmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.outline
+            )
         }
     }
 }
@@ -364,7 +486,8 @@ private fun FileListItem(file: File, onClick: () -> Unit) {
         leadingContent = {
             Icon(
                 imageVector = if (file.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                contentDescription = null, tint = if (file.isDirectory) MaterialTheme.colorScheme.primary else Color.Gray
+                contentDescription = null,
+                tint = if (file.isDirectory) MaterialTheme.colorScheme.primary else Color.Gray
             )
         },
         modifier = Modifier.clickable(onClick = onClick)
@@ -379,7 +502,9 @@ private fun LogPanel(logs: List<String>, modifier: Modifier = Modifier) {
         Text(
             text = logs.joinToString("\n"),
             modifier = Modifier.fillMaxSize().verticalScroll(scrollState).padding(12.dp),
-            fontFamily = FontFamily.Monospace, fontSize = 11.sp, lineHeight = 16.sp
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 16.sp
         )
     }
 }

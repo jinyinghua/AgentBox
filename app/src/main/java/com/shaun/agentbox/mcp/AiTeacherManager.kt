@@ -14,6 +14,12 @@ import java.util.UUID
 @Serializable
 data class AiMessage(val role: String, val content: String)
 
+data class AiTeacherConfig(
+    val endpoint: String = "https://api.openai.com/v1/chat/completions",
+    val apiKey: String = "",
+    val model: String = "gpt-4o"
+)
+
 class AiTeacherManager(private val context: Context) {
     private val historyFile = File(context.filesDir, "ai_teacher_history.json")
     private val configFile = File(context.filesDir, "ai_teacher_config.json")
@@ -34,27 +40,36 @@ class AiTeacherManager(private val context: Context) {
         historyFile.writeText(json.encodeToString(history))
     }
 
-    private data class TeacherConfig(val endpoint: String, val apiKey: String, val model: String)
-
-    private fun getConfig(): TeacherConfig? {
+    fun loadConfig(): AiTeacherConfig {
         if (!configFile.exists()) {
-            val defaultConfig = buildJsonObject {
-                put("endpoint", "https://api.openai.com/v1/chat/completions")
-                put("apiKey", "YOUR_API_KEY_HERE")
-                put("model", "gpt-4o")
-            }
-            configFile.writeText(defaultConfig.toString())
-            return null
+            val defaultConfig = AiTeacherConfig()
+            saveConfig(defaultConfig)
+            return defaultConfig
         }
         return try {
             val root = json.parseToJsonElement(configFile.readText()).jsonObject
-            val endpoint = root["endpoint"]?.jsonPrimitive?.content ?: "https://api.openai.com/v1/chat/completions"
-            val apiKey = root["apiKey"]?.jsonPrimitive?.content ?: ""
-            val model = root["model"]?.jsonPrimitive?.content ?: "gpt-4o"
-            TeacherConfig(endpoint, apiKey, model)
+            AiTeacherConfig(
+                endpoint = root["endpoint"]?.jsonPrimitive?.content ?: "https://api.openai.com/v1/chat/completions",
+                apiKey = root["apiKey"]?.jsonPrimitive?.content ?: "",
+                model = root["model"]?.jsonPrimitive?.content ?: "gpt-4o"
+            )
         } catch (e: Exception) {
-            null
+            AiTeacherConfig()
         }
+    }
+
+    fun saveConfig(config: AiTeacherConfig) {
+        val jsonContent = buildJsonObject {
+            put("endpoint", config.endpoint)
+            put("apiKey", config.apiKey)
+            put("model", config.model)
+        }.toString()
+        configFile.writeText(jsonContent)
+    }
+
+    fun isConfigured(): Boolean {
+        val config = loadConfig()
+        return config.apiKey.isNotEmpty() && config.apiKey != "YOUR_API_KEY_HERE"
     }
 
     suspend fun askTeacher(content: String, id: String?): Pair<String, String> = withContext(Dispatchers.IO) {
@@ -66,7 +81,10 @@ class AiTeacherManager(private val context: Context) {
         
         messages.add(AiMessage("user", content))
         
-        val config = getConfig() ?: throw Exception("Please configure API key in ${configFile.absolutePath}")
+        val config = loadConfig()
+        if (config.apiKey.isEmpty() || config.apiKey == "YOUR_API_KEY_HERE") {
+            throw Exception("AI Teacher not configured. Please set API key in Settings.")
+        }
         
         val requestBody = buildJsonObject {
             put("model", config.model)
@@ -114,6 +132,12 @@ class AiTeacherManager(private val context: Context) {
             Pair(sessionId, replyContent)
         } finally {
             conn.disconnect()
+        }
+    }
+
+    fun clearHistory() {
+        if (historyFile.exists()) {
+            historyFile.delete()
         }
     }
 }
