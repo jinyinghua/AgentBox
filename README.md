@@ -41,7 +41,7 @@ AgentBox is a powerful Android application that provides a sandboxed Linux envir
 
 ### Usage
 1. Open the AgentBox app.
-2. Initialize the sandbox environment (it will download/extract Alpine Linux on first run).
+2. Initialize the sandbox environment (it will extract Alpine Linux on first run).
 3. Start the MCP Service.
 4. Use the Floating Window to keep the service running while you interact with your AI agent.
 
