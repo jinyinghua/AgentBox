@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.shaun.agentbox.mcp.McpService
 import com.shaun.agentbox.mcp.AiTeacherManager
+import com.shaun.agentbox.mcp.ToolExecutor
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
 import com.shaun.agentbox.sandbox.SandboxBackupManager
@@ -69,6 +70,7 @@ fun AgentBoxApp() {
     val linuxManager = remember { LinuxEnvironmentManager(context) }
     val backupManager = remember { SandboxBackupManager(context) }
     val aiTeacherManager = remember { AiTeacherManager(context) }
+    val toolExecutor = remember { ToolExecutor(context) }
 
     var envInstalled by remember { mutableStateOf(linuxManager.isInstalled) }
     var installProgress by remember { mutableIntStateOf(0) }
@@ -78,6 +80,7 @@ fun AgentBoxApp() {
     var isFloatingRunning by remember { mutableStateOf(FloatingWindowService.isRunning) }
     var serverAddress by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showTerminal by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -109,6 +112,11 @@ fun AgentBoxApp() {
         onDispose { McpService.onLog = null }
     }
     var showLog by remember { mutableStateOf(false) }
+
+    // Terminal State
+    var commandInput by remember { mutableStateOf("") }
+    var terminalOutput by remember { mutableStateOf("") }
+    var isExecuting by remember { mutableStateOf(false) }
 
     // Backup/Restore State
     var backupProgress by remember { mutableIntStateOf(-1) }
@@ -159,6 +167,42 @@ fun AgentBoxApp() {
         return@AgentBoxApp
     }
 
+    // Terminal Screen
+    if (showTerminal) {
+        TerminalScreen(
+            commandInput = commandInput,
+            onCommandInputChange = { commandInput = it },
+            terminalOutput = terminalOutput,
+            isExecuting = isExecuting,
+            envInstalled = envInstalled,
+            onExecute = {
+                if (commandInput.isNotBlank()) {
+                    isExecuting = true
+                    terminalOutput = "> $commandInput\n"
+                    scope.launch {
+                        try {
+                            val result = toolExecutor.executeCommand(commandInput)
+                            terminalOutput += result.content.joinToString("\n") { it.text }
+                            if (result.isError) {
+                                terminalOutput += "\n[Command failed]"
+                            }
+                        } catch (e: Exception) {
+                            terminalOutput += "\nError: ${e.message}"
+                        } finally {
+                            isExecuting = false
+                        }
+                    }
+                }
+            },
+            onClear = {
+                terminalOutput = ""
+                commandInput = ""
+            },
+            onBack = { showTerminal = false }
+        )
+        return@AgentBoxApp
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -181,9 +225,12 @@ fun AgentBoxApp() {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showTerminal = true }) {
+                        Icon(Icons.Default.Terminal, contentDescription = "Terminal")
+                    }
                     IconButton(onClick = { refreshTrigger++ }) { Icon(Icons.Default.Refresh, contentDescription = null) }
                     IconButton(onClick = { showLog = !showLog }) {
-                        Icon(if (showLog) Icons.Default.Folder else Icons.Default.Terminal, contentDescription = null)
+                        Icon(if (showLog) Icons.Default.Folder else Icons.Default.List, contentDescription = null)
                     }
                     Box {
                         IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu") }
@@ -336,6 +383,136 @@ fun AgentBoxApp() {
                             }
                         })
                     }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun TerminalScreen(
+    commandInput: String,
+    onCommandInputChange: (String) -> Unit,
+    terminalOutput: String,
+    isExecuting: Boolean,
+    envInstalled: Boolean,
+    onExecute: () -> Unit,
+    onClear: () -> Unit,
+    onBack: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    
+    LaunchedEffect(terminalOutput) {
+        scrollState.animateScrollTo(scrollState.maxValue)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Terminal") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onClear) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            // Output area
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                color = Color.Black
+            ) {
+                Text(
+                    text = terminalOutput.ifEmpty { "No output yet. Enter a command below." },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(12.dp),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 12.sp,
+                    color = Color.Green,
+                    lineHeight = 18.sp
+                )
+            }
+
+            // Input area
+            Surface(
+                tonalElevation = 3.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = commandInput,
+                        onValueChange = onCommandInputChange,
+                        modifier = Modifier.weight(1f),
+                        placeholder = { Text("Enter command...", color = Color.Gray) },
+                        singleLine = true,
+                        enabled = !isExecuting && envInstalled,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color.Green,
+                            unfocusedBorderColor = Color.Gray,
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            cursorColor = Color.Green
+                        ),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+                    )
+
+                    if (isExecuting) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(36.dp),
+                            color = Color.Green
+                        )
+                    } else {
+                        IconButton(
+                            onClick = onExecute,
+                            enabled = commandInput.isNotBlank() && envInstalled,
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(
+                                    color = if (commandInput.isNotBlank() && envInstalled) Color.Green else Color.Gray,
+                                    shape = MaterialTheme.shapes.medium
+                                )
+                        ) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = "Execute",
+                                tint = Color.Black
+                            )
+                        }
+                    }
+                }
+
+                if (!envInstalled) {
+                    Text(
+                        "⚠️ Linux environment not installed. Please install it first.",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(Color.Yellow.copy(alpha = 0.2f))
+                            .padding(8.dp),
+                        color = Color.Yellow,
+                        style = MaterialTheme.typography.labelSmall
+                    )
                 }
             }
         }

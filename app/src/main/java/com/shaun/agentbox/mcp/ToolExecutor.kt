@@ -65,7 +65,7 @@ class ToolExecutor(context: Context) {
         }
     }
 
-    private suspend fun executeCommand(command: String): CallToolResult = withContext(Dispatchers.IO) {
+    suspend fun executeCommand(command: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
             if (!linuxManager.isInstalled) {
                 return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
