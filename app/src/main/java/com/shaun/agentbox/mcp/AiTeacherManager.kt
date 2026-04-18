@@ -75,8 +75,9 @@ class AiTeacherManager(private val context: Context) {
     suspend fun askTeacher(content: String, id: String?): Pair<String, String> = withContext(Dispatchers.IO) {
         val history = loadHistory()
         val sessionId = id ?: UUID.randomUUID().toString()
+        // 移除 system prompt，初始化空消息列表
         val messages = history.getOrPut(sessionId) {
-            mutableListOf(AiMessage("system", "You are an AI teacher assisting another AI. Provide accurate, helpful, and concise answers."))
+            mutableListOf()
         }
         
         messages.add(AiMessage("user", content))
@@ -88,6 +89,7 @@ class AiTeacherManager(private val context: Context) {
         
         val requestBody = buildJsonObject {
             put("model", config.model)
+            put("stream", false)  // 明确指定非流式传输
             putJsonArray("messages") {
                 messages.forEach { msg ->
                     add(buildJsonObject {
