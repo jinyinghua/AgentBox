@@ -8,6 +8,7 @@ AgentBox is a powerful Android application that provides a sandboxed Linux envir
 - **MCP (Model Context Protocol) Support**: Built-in MCP server implementation allowing AI agents to call tools and interact with the system.
 - **AI Teacher Integration**: A dedicated "AI Teacher" tool (`ask_ai_teacher`) to assist with complex problem-solving.
 - **Floating Window Control**: A convenient overlay interface to manage the MCP service and monitor agent activities in the background.
+- **Manual Terminal**: Execute commands directly from the app interface without needing an MCP client.
 - **Sandbox Management**: Supports backup, export, and import of the entire sandbox environment.
 - **Pre-configured Tooling**: Optimized `PATH`, permissions, and essential packages for a seamless agent experience.
 - **Modern UI**: Built with Jetpack Compose for a smooth and responsive Android experience.
@@ -44,6 +45,7 @@ AgentBox is a powerful Android application that provides a sandboxed Linux envir
 2. Initialize the sandbox environment (it will extract Alpine Linux on first run).
 3. Start the MCP Service.
 4. Use the Floating Window to keep the service running while you interact with your AI agent.
+5. **Manual Terminal**: Tap the terminal icon in the top app bar to open the command execution interface.
 
 ## 📜 Development
 
