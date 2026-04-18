@@ -66,13 +66,12 @@ object McpTools {
 
     private fun buildExecuteCommandDef() = buildJsonObject {
         put("name", "execute_command")
-        put("description", "Execute a shell command in the Alpine Linux sandbox. The environment is persistent. You have full root-like access. Standard Linux tools (ls, grep, cat) are available in PATH. You can install new tools using 'apk add <package>'. Python3 and Git can be installed this way.")
+        put("description", "Execute a shell command in the Alpine Linux sandbox. You have full root-like access. You can install new tools using 'apk add <package>'. Python3 and Git can be installed this way.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("command") {
                     put("type", "string")
-                    put("description", "The shell command to execute. Example: 'apk update && apk add python3'")
                 }
             }
             putJsonArray("required") { add(JsonPrimitive("command")) }
@@ -96,13 +95,12 @@ object McpTools {
 
     private fun buildModifyFileDef() = buildJsonObject {
         put("name", "modify_file")
-        put("description", "Create or edit a file in the /workspace.")
+        put("description", "Create or edit a file in the /workspace. Path is relative to /workspace.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("path") {
                     put("type", "string")
-                    put("description", "Relative path to file")
                 }
                 putJsonObject("content") {
                     put("type", "string")
@@ -131,7 +129,7 @@ object McpTools {
 
     private fun buildAskAiTeacherDef() = buildJsonObject {
         put("name", "ask_ai_teacher")
-        put("description", "Ask the AI teacher a question. If continuing a conversation, provide the session id.")
+        put("description", "When you encounter difficult problems or are hesitant, prioritize asking the AI teacher, which is built on an advanced model. If continuing a conversation, provide the session id.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
