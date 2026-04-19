@@ -4,18 +4,13 @@ import android.content.Context
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.File
 
 /**
  * MCP Tool 执行器 (升级版：注入完整环境变量)
@@ -30,7 +25,7 @@ class ToolExecutor(context: Context) {
     companion object {
         private const val COMMAND_TIMEOUT_MS = 60_000L // 增加到 60s 以便 apk 安装软件
         private const val MAX_OUTPUT_LENGTH = 100_000
-        
+
         // 【修复1】标准的 Linux PATH
         private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
     }
@@ -54,7 +49,7 @@ class ToolExecutor(context: Context) {
                     ?: return errorResult("Missing required argument: content")
                 modifyFile(path, content)
             }
-            
+
             "ask_ai_teacher" -> {
                 val content = arguments["content"]?.jsonPrimitive?.content
                     ?: return errorResult("Missing required argument: content")
@@ -104,9 +99,10 @@ class ToolExecutor(context: Context) {
                 }
 
                 val exitCode = process.waitFor()
+                val finalOutput = if (output.isNotEmpty()) output else ""
 
                 CallToolResult(
-                    content = listOf(ToolContent(type = "text", text = output + "\n[exit code: $exitCode]")),
+                    content = listOf(ToolContent(type = "text", text = finalOutput)),
                     isError = exitCode != 0
                 )
             }
@@ -119,13 +115,13 @@ class ToolExecutor(context: Context) {
         try {
             val file = sandboxManager.resolveFile(path)
             if (!file.exists()) return@withContext errorResult("File not found: $path")
-            
+
             val content = if (file.isDirectory) {
                 file.listFiles()?.joinToString("\n") { it.name } ?: "(empty)"
             } else {
                 file.readText()
             }
-            
+
             CallToolResult(
                 content = listOf(ToolContent(type = "text", text = content)),
                 isError = false
@@ -161,7 +157,7 @@ class ToolExecutor(context: Context) {
                 put("id", sessionId)
                 put("reply", reply)
             }.toString()
-            
+
             CallToolResult(
                 content = listOf(ToolContent(type = "text", text = resultText)),
                 isError = false
