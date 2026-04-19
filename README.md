@@ -1,59 +1,149 @@
 # AgentBox
 
-AgentBox is a powerful Android application that provides a sandboxed Linux environment specifically designed for AI agents. It leverages `proot` and `Alpine Linux` to create a secure, isolated workspace where AI models can execute code, manage files, and perform complex tasks through the Model Context Protocol (MCP).
+AgentBox is an Android app that turns your phone into a sandboxed Linux workspace for AI agents.
+It provides a built-in MCP server, a local terminal, file management, tool permission controls, and an optional **AI Teacher** that lets the sandboxed agent ask a stronger external model for help.
 
-## 🚀 Features
+AgentBox is designed for scenarios where you want an AI to operate on-device with a controllable tool boundary, instead of giving it unrestricted access to your whole system.
 
-- **Sandboxed Linux Environment**: Runs a full Alpine Linux distribution on Android using `proot`, no root required.
-- **MCP (Model Context Protocol) Support**: Built-in MCP server implementation allowing AI agents to call tools and interact with the system.
-- **AI Teacher Integration**: A dedicated "AI Teacher" tool (`ask_ai_teacher`) to assist with complex problem-solving.
-- **Floating Window Control**: A convenient overlay interface to manage the MCP service and monitor agent activities in the background.
-- **Manual Terminal**: Execute commands directly from the app interface without needing an MCP client.
-- **Sandbox Management**: Supports backup, export, and import of the entire sandbox environment.
-- **Pre-configured Tooling**: Optimized `PATH`, permissions, and essential packages for a seamless agent experience.
-- **Modern UI**: Built with Jetpack Compose for a smooth and responsive Android experience.
+## Features
 
-## 🏗️ Architecture
+- **Sandboxed Linux on Android**
+  - Runs Alpine Linux inside a `proot` environment
+  - No root required
+  - Isolated workspace for agent operations
 
-- **Core**: Android (Kotlin)
-- **Sandbox**: Alpine Linux rootfs + proot
-- **Communication**: SSE (Server-Sent Events) for MCP transport, JSON-RPC for messaging.
-- **UI**: Jetpack Compose & Material 3
+- **Built-in MCP Server**
+  - Exposes tools over MCP using SSE transport
+  - Easy to connect from external MCP-compatible clients
+  - Includes request/response logs for debugging
 
-## 📂 Project Structure
+- **Manual Terminal**
+  - Execute commands directly inside the sandbox
+  - Useful for testing the environment without an external MCP client
 
-- `app/src/main/java/.../mcp/`: MCP protocol implementation and tool execution logic.
-- `app/src/main/java/.../sandbox/`: Linux environment management (Alpine/proot).
-- `app/src/main/java/.../ui/`: Compose-based UI components and Floating Window service.
-- `workspace/`: Default directory for agent operations and file storage.
-- `scripts/`: Maintenance scripts for code updates and environment setup.
+- **File Manager**
+  - Browse files inside the workspace
+  - Read and edit files through MCP tools
+  - Convenient for verifying what the agent changed
 
-## 🛠️ Getting Started
+- **Tool Control**
+  - Enable or disable tools individually
+  - Optional approval gate for sensitive tools
+  - Better control over agent behavior
 
-### Prerequisites
+- **AI Teacher**
+  - A special tool: `ask_ai_teacher`
+  - Lets the sandboxed agent ask a more powerful external model for help
+  - Supports OpenAI-compatible APIs
+
+- **Floating Window Controls**
+  - Keep the MCP service running in the background
+  - Quick access to service state and controls
+
+- **Backup / Import / Export**
+  - Manage sandbox data more safely
+  - Useful when migrating devices or testing environments
+
+## Architecture
+
+- **Platform**: Android
+- **Language**: Kotlin
+- **UI**: Jetpack Compose + Material 3
+- **Sandbox**: Alpine Linux + `proot`
+- **Protocol**: MCP over SSE, JSON-RPC messages
+
+## Built-in Tools
+
+AgentBox currently includes these core tools:
+
+- `execute_command`
+  - Execute a shell command in the Alpine Linux sandbox
+- `read_file`
+  - Read a file from `/workspace`
+- `modify_file`
+  - Create or edit a file in `/workspace`
+- `ask_ai_teacher`
+  - Ask an external stronger model for help through an OpenAI-compatible API
+
+## AI Teacher
+
+The AI Teacher is intended for cases where the local sandboxed agent gets stuck, hesitates, or needs stronger reasoning.
+
+You can configure:
+- API endpoint
+- API key
+- model name
+
+Configuration is stored locally inside the app, and the tool can be called by the agent when enabled.
+
+### Example call
+
+#### Request
+
+```json
+{
+  "content": "Hello! This is a test message. Calculate 2 + 2."
+}
+```
+
+#### Response
+
+```json
+{
+  "id": "116ed83a-334b-40b8-9a1c-5a345b6d5667",
+  "reply": "Hello! Message received.\n\n2 + 2 = 4"
+}
+```
+
+## Getting Started
+
+### Requirements
+
 - Android Studio Ladybug or newer
 - JDK 17+
-- Android Device/Emulator (API 26+)
+- Android device or emulator
+- Android API 26+
 
-### Installation
+### Build
+
 1. Clone the repository.
-2. Open the `agentbox` folder in Android Studio.
+2. Open the project in Android Studio.
 3. Build and run the `app` module.
 
-### Usage
-1. Open the AgentBox app.
-2. Initialize the sandbox environment (it will extract Alpine Linux on first run).
-3. Start the MCP Service.
-4. Use the Floating Window to keep the service running while you interact with your AI agent.
-5. **Manual Terminal**: Tap the terminal icon in the top app bar to open the command execution interface.
+## Basic Usage
 
-## 📜 Development
+1. Open AgentBox.
+2. Initialize or install the Linux environment if prompted.
+3. Start the MCP service.
+4. Connect your MCP client to the SSE endpoint shown by the app.
+5. Use the floating controls if you want the service to keep running in the background.
+6. Optionally open the built-in terminal to test commands directly.
 
-The project includes several utility scripts for maintaining the MCP implementation:
-- `update_mcp_models.py`: Updates the JSON-RPC data models.
-- `update_tool_executor.py`: Updates the tool execution logic.
-- `fix_imports.py`: Helper script for managing Kotlin imports.
+## Connecting an MCP Client
 
-## 📄 License
+After starting the MCP service, AgentBox displays a local SSE address similar to:
+
+```text
+http://127.0.0.1:8192/sse
+```
+
+Your MCP client can connect to this endpoint and then call the built-in tools.
+
+## Project Structure
+
+```text
+app/src/main/java/com/shaun/agentbox/
+├── mcp/       # MCP models, service, tool execution, AI Teacher integration
+├── sandbox/   # Linux environment and workspace management
+└── ui/        # Compose UI and floating window service
+```
+
+## Notes
+
+- The sandbox is isolated, but tools can still be powerful. Be careful with `execute_command`.
+- Tool switches and approval settings are recommended when connecting less trusted agents.
+- The MCP server is intended for local use on the device unless you explicitly expose it yourself.
+
+## License
 
 MIT
