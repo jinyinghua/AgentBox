@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -177,18 +179,22 @@ fun AgentBoxApp() {
             envInstalled = envInstalled,
             onExecute = {
                 if (commandInput.isNotBlank()) {
+                    val executingCommand = commandInput
                     isExecuting = true
-                    terminalOutput = "> $commandInput\n"
+                    terminalOutput += "\nroot@agentbox:~$ $executingCommand\n"
                     scope.launch {
                         try {
-                            val result = toolExecutor.executeCommand(commandInput)
-                            terminalOutput += result.content.joinToString("\n") { it.text }
+                            val result = toolExecutor.executeCommand(executingCommand)
+                            val commandOutput = result.content.joinToString("\n") { it.text }.trimEnd()
+                            terminalOutput += if (commandOutput.isNotBlank()) "$commandOutput\n" else "\n"
                             if (result.isError) {
-                                terminalOutput += "\n[Command failed]"
+                                terminalOutput += "[exit: non-zero]\n"
                             }
                         } catch (e: Exception) {
-                            terminalOutput += "\nError: ${e.message}"
+                            terminalOutput += "Error: ${e.message}\n"
                         } finally {
+                            terminalOutput += "root@agentbox:~$ "
+                            commandInput = ""
                             isExecuting = false
                         }
                     }
@@ -402,7 +408,10 @@ fun TerminalScreen(
     onBack: () -> Unit
 ) {
     val scrollState = rememberScrollState()
-    
+    val terminalBg = Color(0xFF0D1117)
+    val terminalText = Color(0xFF58A6FF)
+    val promptColor = Color(0xFF3FB950)
+
     LaunchedEffect(terminalOutput) {
         scrollState.animateScrollTo(scrollState.maxValue)
     }
@@ -428,23 +437,24 @@ fun TerminalScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .background(terminalBg)
         ) {
             // Output area
             Surface(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-                color = Color.Black
+                color = terminalBg
             ) {
                 Text(
-                    text = terminalOutput.ifEmpty { "No output yet. Enter a command below." },
+                    text = terminalOutput.ifEmpty { "root@agentbox:~$ " },
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
                         .padding(12.dp),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
-                    color = Color.Green,
+                    color = terminalText,
                     lineHeight = 18.sp
                 )
             }
@@ -452,55 +462,83 @@ fun TerminalScreen(
             // Input area
             Surface(
                 tonalElevation = 3.dp,
+                color = Color(0xFF161B22),
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    OutlinedTextField(
-                        value = commandInput,
-                        onValueChange = onCommandInputChange,
-                        modifier = Modifier.weight(1f),
-                        placeholder = { Text("Enter command...", color = Color.Gray) },
-                        singleLine = true,
-                        enabled = !isExecuting && envInstalled,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color.Green,
-                            unfocusedBorderColor = Color.Gray,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            cursorColor = Color.Green
-                        ),
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-                    )
-
-                    if (isExecuting) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(36.dp),
-                            color = Color.Green
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "$",
+                            color = promptColor,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 18.sp
                         )
-                    } else {
-                        IconButton(
-                            onClick = onExecute,
-                            enabled = commandInput.isNotBlank() && envInstalled,
-                            modifier = Modifier
-                                .size(48.dp)
-                                .background(
-                                    color = if (commandInput.isNotBlank() && envInstalled) Color.Green else Color.Gray,
-                                    shape = MaterialTheme.shapes.medium
-                                )
-                        ) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = "Execute",
-                                tint = Color.Black
+                        OutlinedTextField(
+                            value = commandInput,
+                            onValueChange = onCommandInputChange,
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("输入 Linux 命令…", color = Color.Gray) },
+                            singleLine = true,
+                            enabled = !isExecuting && envInstalled,
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Text,
+                                imeAction = ImeAction.Done
+                            ),
+                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                                onDone = { if (commandInput.isNotBlank() && envInstalled) onExecute() }
+                            ),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = promptColor,
+                                unfocusedBorderColor = Color(0xFF30363D),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedContainerColor = Color(0xFF0D1117),
+                                unfocusedContainerColor = Color(0xFF0D1117),
+                                cursorColor = promptColor
+                            ),
+                            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+                        )
+
+                        if (isExecuting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = promptColor,
+                                strokeWidth = 2.dp
                             )
+                        } else {
+                            IconButton(
+                                onClick = onExecute,
+                                enabled = commandInput.isNotBlank() && envInstalled,
+                                modifier = Modifier
+                                    .size(44.dp)
+                                    .background(
+                                        color = if (commandInput.isNotBlank() && envInstalled) promptColor else Color(0xFF30363D),
+                                        shape = RoundedCornerShape(10.dp)
+                                    )
+                            ) {
+                                Icon(
+                                    Icons.Default.KeyboardReturn,
+                                    contentDescription = "Execute",
+                                    tint = Color.Black
+                                )
+                            }
                         }
                     }
+
+                    Text(
+                        text = "Tip: 按回车发送命令，支持常见 bash 命令（ls/cd/cat/apt 等）。",
+                        color = Color(0xFF8B949E),
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
                 }
 
                 if (!envInstalled) {
