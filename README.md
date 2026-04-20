@@ -26,11 +26,6 @@ AgentBox is designed for scenarios where you want an AI to operate on-device wit
   - Read and edit files through MCP tools
   - Convenient for verifying what the agent changed
 
-- **Tool Control**
-  - Enable or disable tools individually
-  - Optional approval gate for sensitive tools
-  - Better control over agent behavior
-
 - **AI Teacher**
   - A special tool: `ask_ai_teacher`
   - Lets the sandboxed agent ask a more powerful external model for help
