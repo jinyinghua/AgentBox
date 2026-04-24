@@ -5,6 +5,16 @@ It provides a built-in MCP server, a local terminal, file management, tool permi
 
 AgentBox is designed for scenarios where you want an AI to operate on-device with a controllable tool boundary, instead of giving it unrestricted access to your whole system.
 
+## Screenshots
+
+| Main Interface | MCP Client Connected | AI Teacher Config |
+|:---:|:---:|:---:|
+| ![Main Interface](docs/image/5.jpg) | ![MCP Client Connected](docs/image/1.png) | ![AI Teacher Config](docs/image/4.jpg) |
+
+| Log Display | In-App Terminal |
+|:---:|:---:|
+| ![Log Display](docs/image/2.jpg) | ![In-App Terminal](docs/image/3.jpg) |
+
 ## Features
 
 - **Sandboxed Linux on Android**
@@ -123,6 +133,8 @@ http://127.0.0.1:8192/sse
 ```
 
 Your MCP client can connect to this endpoint and then call the built-in tools.
+
+> **Note:** For security reasons, the MCP server only accepts connections from **localhost (the device itself)**. Remote connections are not supported.
 
 ## Project Structure
 
