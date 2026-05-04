@@ -175,6 +175,58 @@ class ToolExecutor(context: Context) {
         }
     }
 
+    suspend fun executeCommandStreaming(
+        command: String,
+        onOutputChunk: (String) -> Unit
+    ): CallToolResult = withContext(Dispatchers.IO) {
+        try {
+            if (!linuxManager.isInstalled) {
+                return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
+            }
+
+            val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
+            val processBuilder = ProcessBuilder(*prootCmd)
+                .directory(sandboxManager.workspaceDir)
+                .redirectErrorStream(true)
+
+            val env = processBuilder.environment()
+            env["PATH"] = LINUX_PATH
+            env["HOME"] = "/root"
+            env["USER"] = "root"
+            env["LOGNAME"] = "root"
+            env["TERM"] = "xterm-256color"
+            env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+
+            val process = processBuilder.start()
+            val output = buildString {
+                process.inputStream.bufferedReader().use { reader ->
+                    var totalRead = 0
+                    val buffer = CharArray(1024)
+                    var read: Int
+                    while (reader.read(buffer).also { read = it } != -1) {
+                        if (read <= 0) continue
+                        val chunk = String(buffer, 0, read)
+                        onOutputChunk(chunk)
+                        if (totalRead < MAX_OUTPUT_LENGTH) {
+                            val remaining = MAX_OUTPUT_LENGTH - totalRead
+                            val appendLen = minOf(remaining, read)
+                            append(chunk, 0, appendLen)
+                            totalRead += appendLen
+                        }
+                    }
+                }
+            }
+
+            val exitCode = process.waitFor()
+            CallToolResult(
+                content = listOf(ToolContent(type = "text", text = output)),
+                isError = exitCode != 0
+            )
+        } catch (e: Exception) {
+            errorResult("Execution failed: ${e.message}")
+        }
+    }
+
     private suspend fun readFile(path: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
             val file = sandboxManager.resolveFile(path)
