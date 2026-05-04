@@ -41,6 +41,12 @@ AgentBox is designed for scenarios where you want an AI to operate on-device wit
   - Lets the sandboxed agent ask a more powerful external model for help
   - Supports OpenAI-compatible APIs
 
+- **Autonomous Multi-Agent Runtime**
+  - Persistent shared board for orchestrator/worker collaboration
+  - Internal worker agents can autonomously use command / read / modify tools in turns
+  - Worker agents use a separately configured sub-agent model, so they do not consume the expensive AI Teacher config
+  - Workers cannot call `ask_ai_teacher`; they must post questions/status to the board for the main AI to inspect
+
 - **Floating Window Controls**
   - Keep the MCP service running in the background
   - Quick access to service state and controls
@@ -69,6 +75,22 @@ AgentBox currently includes these core tools:
   - Create or edit a file in `/workspace`
 - `ask_ai_teacher`
   - Ask an external stronger model for help through an OpenAI-compatible API
+- `create_multi_agent_session`
+  - Create a persistent multi-agent workspace for one user request
+- `list_multi_agent_sessions`
+  - List existing multi-agent workspaces
+- `create_multi_agent_agent`
+  - Create a worker agent with role and initial task
+- `update_multi_agent_status`
+  - Publish the latest worker progress, blockers, and handoff notes
+- `get_multi_agent_board`
+  - Read the shared board: workers plus recent timeline
+- `coordinate_multi_agent`
+  - Leave orchestrator feedback and optional task reassignment
+- `start_multi_agent_runtime` / `pause_multi_agent_runtime` / `resume_multi_agent_runtime` / `stop_multi_agent_runtime`
+  - Control the internal autonomous worker runtime for a session
+- `get_multi_agent_runtime`
+  - Inspect active runtime state
 
 ## AI Teacher
 
@@ -140,10 +162,25 @@ Your MCP client can connect to this endpoint and then call the built-in tools.
 
 ```text
 app/src/main/java/com/shaun/agentbox/
-├── mcp/       # MCP models, service, tool execution, AI Teacher integration
+├── mcp/       # MCP models, service, tool execution, AI Teacher + Multi-Agent board
 ├── sandbox/   # Linux environment and workspace management
 └── ui/        # Compose UI and floating window service
 ```
+
+
+## Multi-Agent Notes
+
+The multi-agent implementation now has two layers:
+
+- **Board layer**: persistent sessions, workers, statuses, and supervisor notes
+- **Runtime layer**: internal autonomous worker loops driven by a separately configured sub-agent model
+
+Important separation:
+- The **main/orchestrator AI** can still use `ask_ai_teacher`
+- **Worker agents cannot call `ask_ai_teacher`**
+- Worker agents instead write blockers and questions to the shared board for the main AI to inspect
+
+This keeps the expensive teacher model separate from cheaper autonomous worker execution.
 
 ## Notes
 

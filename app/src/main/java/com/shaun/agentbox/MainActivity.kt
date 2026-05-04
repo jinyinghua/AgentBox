@@ -41,6 +41,12 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.shaun.agentbox.mcp.McpService
 import com.shaun.agentbox.mcp.AiTeacherManager
+import com.shaun.agentbox.mcp.MultiAgentManager
+import com.shaun.agentbox.mcp.MultiAgentSession
+import com.shaun.agentbox.mcp.MultiAgentRuntimeManager
+import com.shaun.agentbox.mcp.MultiAgentRuntimeSnapshot
+import com.shaun.agentbox.mcp.SubAgentModelConfig
+import com.shaun.agentbox.mcp.SubAgentModelConfigManager
 import com.shaun.agentbox.mcp.ToolExecutor
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
@@ -73,6 +79,9 @@ fun AgentBoxApp() {
     val backupManager = remember { SandboxBackupManager(context) }
     val aiTeacherManager = remember { AiTeacherManager(context) }
     val toolExecutor = remember { ToolExecutor(context) }
+    val multiAgentManager = remember { MultiAgentManager(context) }
+    val multiAgentRuntimeManager = remember { MultiAgentRuntimeManager.getInstance(context) }
+    val subAgentConfigManager = remember { SubAgentModelConfigManager(context) }
 
     var envInstalled by remember { mutableStateOf(linuxManager.isInstalled) }
     var installProgress by remember { mutableIntStateOf(0) }
@@ -82,7 +91,9 @@ fun AgentBoxApp() {
     var isFloatingRunning by remember { mutableStateOf(FloatingWindowService.isRunning) }
     var serverAddress by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
+    var showSubAgentSettings by remember { mutableStateOf(false) }
     var showTerminal by remember { mutableStateOf(false) }
+    var showMultiAgentBoard by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -169,6 +180,23 @@ fun AgentBoxApp() {
         return@AgentBoxApp
     }
 
+    if (showSubAgentSettings) {
+        SubAgentSettingsScreen(
+            manager = subAgentConfigManager,
+            onBack = { showSubAgentSettings = false }
+        )
+        return@AgentBoxApp
+    }
+
+    if (showMultiAgentBoard) {
+        MultiAgentBoardScreen(
+            manager = multiAgentManager,
+            runtimeManager = multiAgentRuntimeManager,
+            onBack = { showMultiAgentBoard = false }
+        )
+        return@AgentBoxApp
+    }
+
     // Terminal Screen
     if (showTerminal) {
         TerminalScreen(
@@ -245,6 +273,16 @@ fun AgentBoxApp() {
                                 text = { Text("AI Teacher Settings") },
                                 onClick = { showMenu = false; showSettings = true },
                                 leadingIcon = { Icon(Icons.Default.School, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Sub-Agent Model Settings") },
+                                onClick = { showMenu = false; showSubAgentSettings = true },
+                                leadingIcon = { Icon(Icons.Default.SmartToy, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Multi-Agent Board") },
+                                onClick = { showMenu = false; showMultiAgentBoard = true },
+                                leadingIcon = { Icon(Icons.Default.List, null) }
                             )
                             Divider()
                             DropdownMenuItem(
@@ -689,6 +727,129 @@ fun AiTeacherSettingsScreen(
     }
 }
 
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SubAgentSettingsScreen(
+    manager: SubAgentModelConfigManager,
+    onBack: () -> Unit
+) {
+    var endpoint by remember { mutableStateOf("") }
+    var apiKey by remember { mutableStateOf("") }
+    var model by remember { mutableStateOf("") }
+    var temperature by remember { mutableStateOf("0.3") }
+    var showApiKey by remember { mutableStateOf(false) }
+    var isSaved by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        val config = manager.loadConfig()
+        endpoint = config.endpoint
+        apiKey = config.apiKey
+        model = config.model
+        temperature = config.temperature.toString()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Sub-Agent Model Settings") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            OutlinedTextField(
+                value = endpoint,
+                onValueChange = { endpoint = it; isSaved = false },
+                label = { Text("API Endpoint") },
+                placeholder = { Text("https://api.openai.com/v1/chat/completions") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = { apiKey = it; isSaved = false },
+                label = { Text("API Key") },
+                placeholder = { Text("sk-...") },
+                singleLine = true,
+                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                trailingIcon = {
+                    IconButton(onClick = { showApiKey = !showApiKey }) {
+                        Icon(
+                            if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showApiKey) "Hide" else "Show"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = model,
+                onValueChange = { model = it; isSaved = false },
+                label = { Text("Model Name") },
+                placeholder = { Text("gpt-4.1-mini") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                value = temperature,
+                onValueChange = { temperature = it; isSaved = false },
+                label = { Text("Temperature") },
+                placeholder = { Text("0.3") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Button(
+                onClick = {
+                    manager.saveConfig(
+                        SubAgentModelConfig(
+                            endpoint = endpoint,
+                            apiKey = apiKey,
+                            model = model,
+                            temperature = temperature.toDoubleOrNull() ?: 0.3
+                        )
+                    )
+                    isSaved = true
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = endpoint.isNotEmpty() && apiKey.isNotEmpty() && model.isNotEmpty()
+            ) {
+                Icon(Icons.Default.Save, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Save Sub-Agent Configuration")
+            }
+
+            if (isSaved) {
+                Text("Configuration saved!", color = MaterialTheme.colorScheme.primary)
+            }
+
+            HorizontalDivider()
+
+            Text(
+                "This model is used by internal worker agents. It is separate from AI Teacher, so you can use a cheaper model for autonomous multi-agent execution.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @Composable
 private fun FileListItem(file: File, onClick: () -> Unit) {
     val dateFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
@@ -722,6 +883,306 @@ private fun LogPanel(logs: List<String>, modifier: Modifier = Modifier) {
             lineHeight = 16.sp
         )
     }
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MultiAgentBoardScreen(
+    manager: MultiAgentManager,
+    runtimeManager: MultiAgentRuntimeManager,
+    onBack: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var sessions by remember { mutableStateOf<List<MultiAgentSession>>(emptyList()) }
+    var selectedSessionId by remember { mutableStateOf<String?>(null) }
+    var isLoading by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var runtimeSnapshots by remember { mutableStateOf<Map<String, MultiAgentRuntimeSnapshot>>(emptyMap()) }
+
+    fun refresh() {
+        scope.launch {
+            isLoading = true
+            errorMessage = null
+            try {
+                sessions = manager.listSessions()
+                runtimeSnapshots = runtimeManager.listRuntimes().associateBy { it.sessionId }
+            } catch (e: Exception) {
+                errorMessage = e.message
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        refresh()
+        while (true) {
+            delay(2000)
+            refresh()
+        }
+    }
+
+    val selectedSession = sessions.firstOrNull { it.id == selectedSessionId }
+    val selectedRuntime = selectedSessionId?.let { runtimeSnapshots[it] }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(if (selectedSession == null) "Multi-Agent Board" else selectedSession.title)
+                        Text(
+                            if (selectedSession == null) "Inspect shared sessions, worker status, and runtime state" else selectedSession.status,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        if (selectedSession != null) {
+                            selectedSessionId = null
+                        } else {
+                            onBack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { refresh() }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            when {
+                isLoading && sessions.isEmpty() -> {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+
+                errorMessage != null -> {
+                    Text(
+                        text = "Load failed: ${errorMessage}",
+                        modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+
+                selectedSession == null -> {
+                    if (sessions.isEmpty()) {
+                        Text(
+                            text = "No multi-agent session yet. Let the connected AI call create_multi_agent_session first.",
+                            modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(sessions, key = { it.id }) { session ->
+                                ElevatedCard(onClick = { selectedSessionId = session.id }) {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(session.title, style = MaterialTheme.typography.titleMedium)
+                                        Text(
+                                            session.objective,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        val runtime = runtimeSnapshots[session.id]
+                                        Text(
+                                            "Status: ${session.status} · Runtime: ${runtime?.status ?: "inactive"} · Agents: ${session.agents.size} · Updated: ${formatTimestamp(session.updatedAt)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                else -> {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        item {
+                            ElevatedCard {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Runtime", style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        "State: ${selectedRuntime?.status ?: "inactive"}",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                    if (selectedRuntime != null) {
+                                        Text(
+                                            "Current agent: ${selectedRuntime.currentAgentName ?: "(none)"} · Loops: ${selectedRuntime.loopCount}",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                        Text(
+                                            "Last tick: ${if (selectedRuntime.lastTickAt > 0) formatTimestamp(selectedRuntime.lastTickAt) else "(never)"}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        if (!selectedRuntime.lastError.isNullOrBlank()) {
+                                            Text(
+                                                "Last error: ${selectedRuntime.lastError}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.error
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            "This session runtime is not active in memory. Board data is still persisted.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            ElevatedCard {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Objective", style = MaterialTheme.typography.titleSmall)
+                                    Text(selectedSession.objective, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "Session ID: ${selectedSession.id}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontFamily = FontFamily.Monospace,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "Created: ${formatTimestamp(selectedSession.createdAt)} · Updated: ${formatTimestamp(selectedSession.updatedAt)}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+
+                        item {
+                            Text("Agents", style = MaterialTheme.typography.titleMedium)
+                        }
+
+                        if (selectedSession.agents.isEmpty()) {
+                            item {
+                                Text(
+                                    "No agents in this session yet.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            items(selectedSession.agents, key = { it.id }) { agent ->
+                                ElevatedCard {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text("${agent.name} · ${agent.role}", style = MaterialTheme.typography.titleSmall)
+                                        Text("Task: ${agent.task}", style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            "Status: ${agent.status}" + (agent.progress?.let { " · ${it}%" } ?: ""),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        if (agent.lastMessage.isNotBlank()) {
+                                            Text(agent.lastMessage, style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        Text(
+                                            "Updated: ${formatTimestamp(agent.updatedAt)}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        item {
+                            Text("Recent Timeline", style = MaterialTheme.typography.titleMedium)
+                        }
+
+                        if (selectedSession.timeline.isEmpty()) {
+                            item {
+                                Text(
+                                    "No timeline entries yet.",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            items(selectedSession.timeline.asReversed(), key = { it.id }) { entry ->
+                                ElevatedCard {
+                                    Column(
+                                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            buildString {
+                                                append(entry.type)
+                                                entry.agentName?.let {
+                                                    append(" · ")
+                                                    append(it)
+                                                }
+                                                entry.supervisor?.let {
+                                                    append(" · ")
+                                                    append(it)
+                                                }
+                                            },
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(entry.message, style = MaterialTheme.typography.bodyMedium)
+                                        Text(
+                                            formatTimestamp(entry.createdAt),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (isLoading && sessions.isNotEmpty()) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+private fun formatTimestamp(timestamp: Long): String {
+    val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+    return dateFormat.format(Date(timestamp))
 }
 
 private fun formatFileSize(bytes: Long): String = when {
