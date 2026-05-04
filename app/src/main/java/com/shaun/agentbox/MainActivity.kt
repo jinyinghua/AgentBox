@@ -130,6 +130,8 @@ fun AgentBoxApp() {
     var commandInput by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
     var isExecuting by remember { mutableStateOf(false) }
+    var terminalCurrentDir by remember { mutableStateOf("~") }
+    var runningSeconds by remember { mutableIntStateOf(0) }
 
     // Backup/Restore State
     var backupProgress by remember { mutableIntStateOf(-1) }
@@ -204,25 +206,60 @@ fun AgentBoxApp() {
             onCommandInputChange = { commandInput = it },
             terminalOutput = terminalOutput,
             isExecuting = isExecuting,
+            terminalCurrentDir = terminalCurrentDir,
+            runningSeconds = runningSeconds,
             envInstalled = envInstalled,
             onExecute = {
                 if (commandInput.isNotBlank()) {
                     val executingCommand = commandInput
                     isExecuting = true
-                    terminalOutput += "\nroot@agentbox:~$ $executingCommand\n"
+                    runningSeconds = 0
+                    val prompt = "root@agentbox:$terminalCurrentDir$"
+                    terminalOutput += "\n$prompt $executingCommand\n"
                     scope.launch {
                         try {
-                            val result = toolExecutor.executeCommand(executingCommand)
-                            val commandOutput = result.content.joinToString("\n") { it.text }.trimEnd()
-                            terminalOutput += if (commandOutput.isNotBlank()) "$commandOutput\n" else "\n"
+                            val timerJob = launch {
+                                while (isExecuting) {
+                                    delay(1000)
+                                    runningSeconds += 1
+                                }
+                            }
+                            val wrappedCommand = "cd \"$terminalCurrentDir\" >/dev/null 2>&1 && $executingCommand"
+                            val result = toolExecutor.executeCommandStreaming(wrappedCommand) { chunk ->
+                                scope.launch(Dispatchers.Main) {
+                                    terminalOutput += chunk
+                                }
+                            }
+                            timerJob.cancel()
+                            terminalOutput = terminalOutput.trimEnd('\n') + "\n"
                             if (result.isError) {
                                 terminalOutput += "[exit: non-zero]\n"
+                            }
+                            val pwdResult = toolExecutor.executeCommand("cd \"$terminalCurrentDir\" >/dev/null 2>&1 && pwd")
+                            if (!pwdResult.isError) {
+                                val latestPwd = pwdResult.content.joinToString("\n") { it.text }.trim().ifBlank { "~" }
+                                terminalCurrentDir = latestPwd
+                            }
+                            val cdRegex = Regex("^\\s*cd(?:\\s+(.+))?\\s*$")
+                            val cdMatch = cdRegex.matchEntire(executingCommand)
+                            if (cdMatch != null) {
+                                val target = cdMatch.groupValues.getOrNull(1)?.trim().orEmpty()
+                                val escapedTarget = target.replace("\"", "\\\"")
+                                val cdCheck = if (target.isBlank()) {
+                                    toolExecutor.executeCommand("cd ~ && pwd")
+                                } else {
+                                    toolExecutor.executeCommand("cd \"$terminalCurrentDir\" >/dev/null 2>&1 && cd \"$escapedTarget\" && pwd")
+                                }
+                                if (!cdCheck.isError) {
+                                    terminalCurrentDir = cdCheck.content.joinToString("\n") { it.text }.trim().ifBlank { "~" }
+                                }
                             }
                         } catch (e: Exception) {
                             terminalOutput += "Error: ${e.message}\n"
                         } finally {
-                            terminalOutput += "root@agentbox:~$ "
+                            terminalOutput += "root@agentbox:$terminalCurrentDir$ "
                             commandInput = ""
+                            runningSeconds = 0
                             isExecuting = false
                         }
                     }
@@ -231,6 +268,7 @@ fun AgentBoxApp() {
             onClear = {
                 terminalOutput = ""
                 commandInput = ""
+                terminalCurrentDir = "~"
             },
             onBack = { showTerminal = false }
         )
@@ -440,6 +478,8 @@ fun TerminalScreen(
     onCommandInputChange: (String) -> Unit,
     terminalOutput: String,
     isExecuting: Boolean,
+    terminalCurrentDir: String,
+    runningSeconds: Int,
     envInstalled: Boolean,
     onExecute: () -> Unit,
     onClear: () -> Unit,
@@ -546,11 +586,19 @@ fun TerminalScreen(
                         )
 
                         if (isExecuting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                color = promptColor,
-                                strokeWidth = 2.dp
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    color = promptColor,
+                                    strokeWidth = 2.dp
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = "Running ${runningSeconds}s · $terminalCurrentDir",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
                         } else {
                             IconButton(
                                 onClick = onExecute,
