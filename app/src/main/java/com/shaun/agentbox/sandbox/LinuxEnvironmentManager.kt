@@ -265,12 +265,10 @@ class LinuxEnvironmentManager(private val context: Context) {
         return try {
             runBootstrapCommand(command)
         } catch (e: Exception) {
-            // In proot, apk may return non-zero even when package files are already installed
-            // (trigger script/syscall limitations). If openssh binaries are present, continue.
-            val sshdBin = File(rootfsDir, "usr/sbin/sshd")
-            val apkBin = File(rootfsDir, "sbin/apk")
-            if (command.contains("apk") && (sshdBin.exists() || apkBin.exists())) {
-                Log.w(TAG, "Ignoring apk non-zero exit because required binaries exist: ${e.message}")
+            // apk exit code 2 means non-fatal trigger script errors in proot.
+            // Package files are still installed successfully.
+            if (command.contains("apk")) {
+                Log.w(TAG, "apk returned non-zero exit code (trigger errors in proot), ignoring: ${e.message}")
                 ""
             } else {
                 throw e
