@@ -114,12 +114,17 @@ class LinuxEnvironmentManager(private val context: Context) {
         val escapedAuthKeys = shellEscape("/root/.ssh/authorized_keys")
 
         val script = """
-            mkdir -p /var/run /run/sshd /root/.ssh /tmp /workspace
+            mkdir -p /var/run /run/sshd /root/.ssh /tmp /workspace /var/empty /var/empty/sshd
             chmod 700 /root/.ssh
             chmod 600 $escapedAuthKeys || true
+            chmod 755 /var/empty /var/empty/sshd || true
             mkdir -p /etc
             [ -f /etc/passwd ] || echo 'root:x:0:0:root:/root:/bin/sh' > /etc/passwd
             [ -f /etc/group ] || echo 'root:x:0:' > /etc/group
+            grep -q '^sshd:' /etc/passwd 2>/dev/null || echo 'sshd:x:22:22:sshd privsep:/var/empty:/sbin/nologin' >> /etc/passwd
+            grep -q '^sshd:' /etc/group 2>/dev/null || echo 'sshd:x:22:' >> /etc/group
+            [ -f /sbin/nologin ] || ln -sf /bin/false /sbin/nologin
+            mkdir -p /run/sshd
             exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config -p $SSH_PORT -h /etc/ssh/ssh_host_rsa_key -o PidFile=/var/run/sshd.pid
         """.trimIndent()
 
