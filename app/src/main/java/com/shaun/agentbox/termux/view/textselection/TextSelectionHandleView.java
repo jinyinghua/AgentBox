@@ -13,7 +13,7 @@ import android.view.ViewParent;
 import android.view.WindowManager;
 import android.widget.PopupWindow;
 
-import com.shaun.agentbox.termux.view.R;
+import com.shaun.agentbox.R;
 import com.shaun.agentbox.termux.view.TerminalView;
 import com.shaun.agentbox.termux.view.support.PopupWindowCompatGingerbread;
 

@@ -285,7 +285,7 @@ fun AgentBoxApp() {
                     }
                     IconButton(onClick = { refreshTrigger++ }) { Icon(Icons.Default.Refresh, contentDescription = null) }
                     IconButton(onClick = { showLog = !showLog }) {
-                        Icon(if (showLog) Icons.Default.Folder else Icons.Default.List, contentDescription = null)
+                        Icon(if (showLog) Icons.Default.Folder else Icons.AutoMirrored.Filled.List, contentDescription = null)
                     }
                     Box {
                         IconButton(onClick = { showMenu = true }) { Icon(Icons.Default.MoreVert, contentDescription = "Menu") }
@@ -303,9 +303,9 @@ fun AgentBoxApp() {
                             DropdownMenuItem(
                                 text = { Text("Multi-Agent Board") },
                                 onClick = { showMenu = false; showMultiAgentBoard = true },
-                                leadingIcon = { Icon(Icons.Default.List, null) }
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.List, null) }
                             )
-                            Divider()
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Share Workspace (Zip)") },
                                 onClick = {
@@ -324,7 +324,7 @@ fun AgentBoxApp() {
                                 },
                                 leadingIcon = { Icon(Icons.Default.Share, null) }
                             )
-                            Divider()
+                            HorizontalDivider()
                             DropdownMenuItem(
                                 text = { Text("Export Full Backup (.tar.gz)") },
                                 onClick = {

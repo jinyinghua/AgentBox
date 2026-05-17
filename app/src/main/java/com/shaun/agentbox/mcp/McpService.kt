@@ -67,7 +67,7 @@ class McpService : Service() {
             return try {
                 val interfaces = NetworkInterface.getNetworkInterfaces()?.toList() ?: return "127.0.0.1"
                 interfaces.firstOrNull { it.isUp && !it.isLoopback }?.inetAddresses
-                    ?.toList()?.firstOrNull { !it.isLoopbackAddress && it.hostAddress.contains('.') }
+                    ?.toList()?.firstOrNull { !it.isLoopbackAddress && (it.hostAddress?.contains('.') == true) }
                     ?.hostAddress ?: "127.0.0.1"
             } catch (e: Exception) {
                 Log.e(TAG, "Error fetching local IP", e)
