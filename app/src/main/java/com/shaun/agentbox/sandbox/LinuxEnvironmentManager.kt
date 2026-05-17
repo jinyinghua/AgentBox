@@ -84,7 +84,15 @@ class LinuxEnvironmentManager(private val context: Context) {
             sshPrivateKeyFile.exists() &&
             sshPublicKeyFile.exists() &&
             File(rootfsDir, "root/.ssh/authorized_keys").exists() &&
-            File(rootfsDir, "usr/sbin/sshd").exists()
+            File(rootfsDir, "usr/sbin/sshd").exists() &&
+            File(rootfsDir, "etc/ssh/sshd_config").exists()
+    }
+
+    suspend fun ensureSshPrepared() = withContext(Dispatchers.IO) {
+        check(isInstalled) { "Linux environment not installed." }
+        if (isSshPrepared()) return@withContext
+        setupDns()
+        setupOpenSsh()
     }
 
     fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {

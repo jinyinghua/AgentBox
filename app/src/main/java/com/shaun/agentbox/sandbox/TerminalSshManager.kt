@@ -28,7 +28,7 @@ class TerminalSshManager(private val context: Context) {
 
     suspend fun ensureServerRunning(workspaceDir: File) = withContext(Dispatchers.IO) {
         check(linuxManager.isInstalled) { "Linux environment not installed." }
-        check(linuxManager.isSshPrepared()) { "SSH environment not initialized. Please reinstall Linux environment." }
+        linuxManager.ensureSshPrepared()
 
         if (isServerAlive()) return@withContext
         if (!starting.compareAndSet(false, true)) {
