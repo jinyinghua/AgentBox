@@ -75,6 +75,9 @@ dependencies {
     // Apache Commons Compress for .tar.gz rootfs extraction
     implementation(libs.commons.compress)
 
+    // SSH client for persistent in-app terminal session
+    implementation(libs.jsch)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

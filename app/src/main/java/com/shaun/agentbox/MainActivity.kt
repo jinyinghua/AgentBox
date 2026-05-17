@@ -47,10 +47,11 @@ import com.shaun.agentbox.mcp.MultiAgentRuntimeManager
 import com.shaun.agentbox.mcp.MultiAgentRuntimeSnapshot
 import com.shaun.agentbox.mcp.SubAgentModelConfig
 import com.shaun.agentbox.mcp.SubAgentModelConfigManager
-import com.shaun.agentbox.mcp.ToolExecutor
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
 import com.shaun.agentbox.sandbox.SandboxBackupManager
+import com.shaun.agentbox.sandbox.TerminalShellSession
+import com.shaun.agentbox.sandbox.TerminalSshManager
 import com.shaun.agentbox.ui.theme.AgentBoxTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -78,7 +79,7 @@ fun AgentBoxApp() {
     val linuxManager = remember { LinuxEnvironmentManager(context) }
     val backupManager = remember { SandboxBackupManager(context) }
     val aiTeacherManager = remember { AiTeacherManager(context) }
-    val toolExecutor = remember { ToolExecutor(context) }
+    val terminalSshManager = remember { TerminalSshManager(context) }
     val multiAgentManager = remember { MultiAgentManager(context) }
     val multiAgentRuntimeManager = remember { MultiAgentRuntimeManager.getInstance(context) }
     val subAgentConfigManager = remember { SubAgentModelConfigManager(context) }
@@ -129,9 +130,11 @@ fun AgentBoxApp() {
     // Terminal State
     var commandInput by remember { mutableStateOf("") }
     var terminalOutput by remember { mutableStateOf("") }
-    var isExecuting by remember { mutableStateOf(false) }
-    var terminalCurrentDir by remember { mutableStateOf("~") }
-    var runningSeconds by remember { mutableIntStateOf(0) }
+    var terminalStatus by remember { mutableStateOf("") }
+    var terminalError by remember { mutableStateOf<String?>(null) }
+    var isTerminalConnecting by remember { mutableStateOf(false) }
+    var terminalSession by remember { mutableStateOf<TerminalShellSession?>(null) }
+    var terminalReconnectNonce by remember { mutableIntStateOf(0) }
 
     // Backup/Restore State
     var backupProgress by remember { mutableIntStateOf(-1) }
@@ -201,66 +204,81 @@ fun AgentBoxApp() {
 
     // Terminal Screen
     if (showTerminal) {
+        LaunchedEffect(envInstalled, showTerminal, terminalReconnectNonce) {
+            if (!showTerminal) return@LaunchedEffect
+            if (!envInstalled) {
+                terminalStatus = "Linux environment not installed"
+                terminalError = "请先安装 Linux 环境。"
+                return@LaunchedEffect
+            }
+            if (terminalSession?.isConnected() == true) return@LaunchedEffect
+
+            isTerminalConnecting = true
+            terminalError = null
+            terminalStatus = "Starting OpenSSH daemon..."
+            try {
+                val session = terminalSshManager.openShell(sandboxManager.workspaceDir)
+                terminalSession?.close()
+                terminalSession = session
+                terminalOutput = ""
+                session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
+                session.write("cd /workspace\n")
+                session.write("clear\n")
+                terminalStatus = "Connected to persistent SSH shell"
+            } catch (e: Exception) {
+                terminalSession?.close()
+                terminalSession = null
+                terminalError = e.message
+                terminalStatus = "Terminal connection failed"
+            } finally {
+                isTerminalConnecting = false
+            }
+        }
+
+        LaunchedEffect(showTerminal, terminalSession) {
+            while (showTerminal && terminalSession != null) {
+                val chunk = runCatching { terminalSession?.readAvailable().orEmpty() }.getOrElse { error ->
+                    terminalError = error.message
+                    terminalStatus = "Terminal disconnected"
+                    ""
+                }
+                if (chunk.isNotEmpty()) {
+                    terminalOutput += chunk
+                }
+                if (terminalSession?.isConnected() != true) {
+                    terminalStatus = "Terminal disconnected"
+                    break
+                }
+                delay(50)
+            }
+        }
+
+        DisposableEffect(showTerminal) {
+            onDispose {
+                terminalSession?.close()
+                terminalSession = null
+            }
+        }
+
         TerminalScreen(
             commandInput = commandInput,
             onCommandInputChange = { commandInput = it },
             terminalOutput = terminalOutput,
-            isExecuting = isExecuting,
-            terminalCurrentDir = terminalCurrentDir,
-            runningSeconds = runningSeconds,
+            terminalStatus = terminalStatus,
+            terminalError = terminalError,
+            isConnecting = isTerminalConnecting,
             envInstalled = envInstalled,
             onExecute = {
-                if (commandInput.isNotBlank()) {
+                val session = terminalSession
+                if (commandInput.isNotBlank() && session != null && session.isConnected()) {
                     val executingCommand = commandInput
-                    isExecuting = true
-                    runningSeconds = 0
-                    val prompt = "root@agentbox:$terminalCurrentDir$"
-                    terminalOutput += "\n$prompt $executingCommand\n"
+                    commandInput = ""
                     scope.launch {
                         try {
-                            val timerJob = launch {
-                                while (isExecuting) {
-                                    delay(1000)
-                                    runningSeconds += 1
-                                }
-                            }
-                            val wrappedCommand = "cd \"$terminalCurrentDir\" >/dev/null 2>&1 && $executingCommand"
-                            val result = toolExecutor.executeCommandStreaming(wrappedCommand) { chunk ->
-                                scope.launch(Dispatchers.Main) {
-                                    terminalOutput += chunk
-                                }
-                            }
-                            timerJob.cancel()
-                            terminalOutput = terminalOutput.trimEnd('\n') + "\n"
-                            if (result.isError) {
-                                terminalOutput += "[exit: non-zero]\n"
-                            }
-                            val pwdResult = toolExecutor.executeCommand("cd \"$terminalCurrentDir\" >/dev/null 2>&1 && pwd")
-                            if (!pwdResult.isError) {
-                                val latestPwd = pwdResult.content.joinToString("\n") { it.text }.trim().ifBlank { "~" }
-                                terminalCurrentDir = latestPwd
-                            }
-                            val cdRegex = Regex("^\\s*cd(?:\\s+(.+))?\\s*$")
-                            val cdMatch = cdRegex.matchEntire(executingCommand)
-                            if (cdMatch != null) {
-                                val target = cdMatch.groupValues.getOrNull(1)?.trim().orEmpty()
-                                val escapedTarget = target.replace("\"", "\\\"")
-                                val cdCheck = if (target.isBlank()) {
-                                    toolExecutor.executeCommand("cd ~ && pwd")
-                                } else {
-                                    toolExecutor.executeCommand("cd \"$terminalCurrentDir\" >/dev/null 2>&1 && cd \"$escapedTarget\" && pwd")
-                                }
-                                if (!cdCheck.isError) {
-                                    terminalCurrentDir = cdCheck.content.joinToString("\n") { it.text }.trim().ifBlank { "~" }
-                                }
-                            }
+                            session.write(executingCommand + "\n")
                         } catch (e: Exception) {
-                            terminalOutput += "Error: ${e.message}\n"
-                        } finally {
-                            terminalOutput += "root@agentbox:$terminalCurrentDir$ "
-                            commandInput = ""
-                            runningSeconds = 0
-                            isExecuting = false
+                            terminalError = e.message
+                            terminalStatus = "Command send failed"
                         }
                     }
                 }
@@ -268,7 +286,15 @@ fun AgentBoxApp() {
             onClear = {
                 terminalOutput = ""
                 commandInput = ""
-                terminalCurrentDir = "~"
+                terminalError = null
+                scope.launch { runCatching { terminalSession?.write("clear\n") } }
+            },
+            onReconnect = {
+                terminalSession?.close()
+                terminalSession = null
+                terminalStatus = "Reconnecting..."
+                terminalError = null
+                terminalReconnectNonce++
             },
             onBack = { showTerminal = false }
         )
@@ -477,12 +503,13 @@ fun TerminalScreen(
     commandInput: String,
     onCommandInputChange: (String) -> Unit,
     terminalOutput: String,
-    isExecuting: Boolean,
-    terminalCurrentDir: String,
-    runningSeconds: Int,
+    terminalStatus: String,
+    terminalError: String?,
+    isConnecting: Boolean,
     envInstalled: Boolean,
     onExecute: () -> Unit,
     onClear: () -> Unit,
+    onReconnect: () -> Unit,
     onBack: () -> Unit
 ) {
     val scrollState = rememberScrollState()
@@ -504,6 +531,9 @@ fun TerminalScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onReconnect, enabled = envInstalled) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Reconnect")
+                    }
                     IconButton(onClick = onClear) {
                         Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
                     }
@@ -517,7 +547,6 @@ fun TerminalScreen(
                 .padding(padding)
                 .background(terminalBg)
         ) {
-            // Output area
             Surface(
                 modifier = Modifier
                     .weight(1f)
@@ -525,7 +554,7 @@ fun TerminalScreen(
                 color = terminalBg
             ) {
                 Text(
-                    text = terminalOutput.ifEmpty { "root@agentbox:~$ " },
+                    text = terminalOutput.ifEmpty { if (isConnecting) "Connecting to SSH shell..." else "" },
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
@@ -537,7 +566,6 @@ fun TerminalScreen(
                 )
             }
 
-            // Input area
             Surface(
                 tonalElevation = 3.dp,
                 color = Color(0xFF161B22),
@@ -565,13 +593,13 @@ fun TerminalScreen(
                             modifier = Modifier.weight(1f),
                             placeholder = { Text("输入 Linux 命令…", color = Color.Gray) },
                             singleLine = true,
-                            enabled = !isExecuting && envInstalled,
+                            enabled = !isConnecting && envInstalled,
                             keyboardOptions = KeyboardOptions(
                                 keyboardType = KeyboardType.Text,
                                 imeAction = ImeAction.Done
                             ),
                             keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                                onDone = { if (commandInput.isNotBlank() && envInstalled) onExecute() }
+                                onDone = { if (commandInput.isNotBlank() && envInstalled && !isConnecting) onExecute() }
                             ),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = promptColor,
@@ -585,28 +613,20 @@ fun TerminalScreen(
                             textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
                         )
 
-                        if (isExecuting) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(24.dp),
-                                    color = promptColor,
-                                    strokeWidth = 2.dp
-                                )
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "Running ${runningSeconds}s · $terminalCurrentDir",
-                                    color = Color.Gray,
-                                    fontSize = 11.sp
-                                )
-                            }
+                        if (isConnecting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                color = promptColor,
+                                strokeWidth = 2.dp
+                            )
                         } else {
                             IconButton(
                                 onClick = onExecute,
-                                enabled = commandInput.isNotBlank() && envInstalled,
+                                enabled = commandInput.isNotBlank() && envInstalled && !isConnecting,
                                 modifier = Modifier
                                     .size(44.dp)
                                     .background(
-                                        color = if (commandInput.isNotBlank() && envInstalled) promptColor else Color(0xFF30363D),
+                                        color = if (commandInput.isNotBlank() && envInstalled && !isConnecting) promptColor else Color(0xFF30363D),
                                         shape = RoundedCornerShape(10.dp)
                                     )
                             ) {
@@ -620,11 +640,19 @@ fun TerminalScreen(
                     }
 
                     Text(
-                        text = "Tip: 按回车发送命令，支持常见 bash 命令（ls/cd/cat/apt 等）。",
-                        color = Color(0xFF8B949E),
+                        text = terminalStatus.ifBlank { "Tip: 这是持久 SSH Shell，cd/交互式程序/流式输出都直接走会话。" },
+                        color = if (terminalError == null) Color(0xFF8B949E) else Color(0xFFFF7B72),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
                     )
+                    if (!terminalError.isNullOrBlank()) {
+                        Text(
+                            text = "Error: $terminalError",
+                            color = Color(0xFFFF7B72),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
                 }
 
                 if (!envInstalled) {
