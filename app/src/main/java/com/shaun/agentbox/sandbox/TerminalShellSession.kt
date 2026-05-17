@@ -11,9 +11,19 @@ class TerminalShellSession(
     private val inputStream: InputStream,
     private val outputStream: OutputStream
 ) {
+    private val writeLock = Any()
     fun write(text: String) {
-        outputStream.write(text.toByteArray())
-        outputStream.flush()
+        synchronized(writeLock) {
+            outputStream.write(text.toByteArray())
+            outputStream.flush()
+        }
+    }
+
+    fun writeBytes(bytes: ByteArray, offset: Int = 0, length: Int = bytes.size - offset) {
+        synchronized(writeLock) {
+            outputStream.write(bytes, offset, length)
+            outputStream.flush()
+        }
     }
 
     fun readAvailable(): String {

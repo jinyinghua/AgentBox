@@ -52,6 +52,7 @@ import com.shaun.agentbox.sandbox.SandboxManager
 import com.shaun.agentbox.sandbox.SandboxBackupManager
 import com.shaun.agentbox.sandbox.TerminalShellSession
 import com.shaun.agentbox.sandbox.TerminalSshManager
+import com.shaun.agentbox.ui.SshTerminalView
 import com.shaun.agentbox.ui.theme.AgentBoxTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -128,8 +129,6 @@ fun AgentBoxApp() {
     var showLog by remember { mutableStateOf(false) }
 
     // Terminal State
-    var commandInput by remember { mutableStateOf("") }
-    var terminalOutput by remember { mutableStateOf("") }
     var terminalStatus by remember { mutableStateOf("") }
     var terminalError by remember { mutableStateOf<String?>(null) }
     var isTerminalConnecting by remember { mutableStateOf(false) }
@@ -220,10 +219,6 @@ fun AgentBoxApp() {
                 val session = terminalSshManager.openShell(sandboxManager.workspaceDir)
                 terminalSession?.close()
                 terminalSession = session
-                terminalOutput = ""
-                session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
-                session.write("cd /workspace\n")
-                session.write("clear\n")
                 terminalStatus = "Connected to persistent SSH shell"
             } catch (e: Exception) {
                 terminalSession?.close()
@@ -235,24 +230,6 @@ fun AgentBoxApp() {
             }
         }
 
-        LaunchedEffect(showTerminal, terminalSession) {
-            while (showTerminal && terminalSession != null) {
-                val chunk = runCatching { terminalSession?.readAvailable().orEmpty() }.getOrElse { error ->
-                    terminalError = error.message
-                    terminalStatus = "Terminal disconnected"
-                    ""
-                }
-                if (chunk.isNotEmpty()) {
-                    terminalOutput += chunk
-                }
-                if (terminalSession?.isConnected() != true) {
-                    terminalStatus = "Terminal disconnected"
-                    break
-                }
-                delay(50)
-            }
-        }
-
         DisposableEffect(showTerminal) {
             onDispose {
                 terminalSession?.close()
@@ -261,34 +238,14 @@ fun AgentBoxApp() {
         }
 
         TerminalScreen(
-            commandInput = commandInput,
-            onCommandInputChange = { commandInput = it },
-            terminalOutput = terminalOutput,
+            terminalSession = terminalSession,
             terminalStatus = terminalStatus,
             terminalError = terminalError,
             isConnecting = isTerminalConnecting,
             envInstalled = envInstalled,
-            onExecute = {
-                val session = terminalSession
-                if (commandInput.isNotBlank() && session != null && session.isConnected()) {
-                    val executingCommand = commandInput
-                    commandInput = ""
-                    scope.launch {
-                        try {
-                            session.write(executingCommand + "\n")
-                        } catch (e: Exception) {
-                            terminalError = e.message
-                            terminalStatus = "Command send failed"
-                        }
-                    }
-                }
-            },
-            onClear = {
-                terminalOutput = ""
-                commandInput = ""
-                terminalError = null
-                scope.launch { runCatching { terminalSession?.write("clear\n") } }
-            },
+            onClearError = { terminalError = null },
+            onStatusChange = { terminalStatus = it },
+            onErrorChange = { terminalError = it },
             onReconnect = {
                 terminalSession?.close()
                 terminalSession = null
@@ -500,26 +457,18 @@ fun AgentBoxApp() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TerminalScreen(
-    commandInput: String,
-    onCommandInputChange: (String) -> Unit,
-    terminalOutput: String,
+    terminalSession: TerminalShellSession?,
     terminalStatus: String,
     terminalError: String?,
     isConnecting: Boolean,
     envInstalled: Boolean,
-    onExecute: () -> Unit,
-    onClear: () -> Unit,
+    onClearError: () -> Unit,
+    onStatusChange: (String) -> Unit,
+    onErrorChange: (String?) -> Unit,
     onReconnect: () -> Unit,
     onBack: () -> Unit
 ) {
-    val scrollState = rememberScrollState()
     val terminalBg = Color(0xFF0D1117)
-    val terminalText = Color(0xFF58A6FF)
-    val promptColor = Color(0xFF3FB950)
-
-    LaunchedEffect(terminalOutput) {
-        scrollState.animateScrollTo(scrollState.maxValue)
-    }
 
     Scaffold(
         topBar = {
@@ -534,8 +483,8 @@ fun TerminalScreen(
                     IconButton(onClick = onReconnect, enabled = envInstalled) {
                         Icon(Icons.Default.Refresh, contentDescription = "Reconnect")
                     }
-                    IconButton(onClick = onClear) {
-                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear")
+                    IconButton(onClick = onClearError, enabled = terminalError != null) {
+                        Icon(Icons.Default.DeleteSweep, contentDescription = "Clear Status")
                     }
                 }
             )
@@ -547,23 +496,30 @@ fun TerminalScreen(
                 .padding(padding)
                 .background(terminalBg)
         ) {
-            Surface(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                color = terminalBg
-            ) {
-                Text(
-                    text = terminalOutput.ifEmpty { if (isConnecting) "Connecting to SSH shell..." else "" },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .padding(12.dp),
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    color = terminalText,
-                    lineHeight = 18.sp
+            if (terminalSession != null && terminalSession.isConnected() && !isConnecting) {
+                SshTerminalView(
+                    shellSession = terminalSession,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    onStatusChange = onStatusChange,
+                    onError = { onErrorChange(it) }
                 )
+            } else {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (isConnecting) {
+                            CircularProgressIndicator(color = Color(0xFF3FB950))
+                            Spacer(Modifier.height(12.dp))
+                        }
+                        Text(
+                            text = if (isConnecting) "Connecting to SSH shell..." else (terminalError ?: terminalStatus),
+                            color = if (terminalError == null) Color(0xFF8B949E) else Color(0xFFFF7B72),
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
             }
 
             Surface(
@@ -572,75 +528,11 @@ fun TerminalScreen(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth().padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = "$",
-                            color = promptColor,
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 18.sp
-                        )
-                        OutlinedTextField(
-                            value = commandInput,
-                            onValueChange = onCommandInputChange,
-                            modifier = Modifier.weight(1f),
-                            placeholder = { Text("输入 Linux 命令…", color = Color.Gray) },
-                            singleLine = true,
-                            enabled = !isConnecting && envInstalled,
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Text,
-                                imeAction = ImeAction.Done
-                            ),
-                            keyboardActions = androidx.compose.foundation.text.KeyboardActions(
-                                onDone = { if (commandInput.isNotBlank() && envInstalled && !isConnecting) onExecute() }
-                            ),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = promptColor,
-                                unfocusedBorderColor = Color(0xFF30363D),
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedContainerColor = Color(0xFF0D1117),
-                                unfocusedContainerColor = Color(0xFF0D1117),
-                                cursorColor = promptColor
-                            ),
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
-                        )
-
-                        if (isConnecting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(32.dp),
-                                color = promptColor,
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            IconButton(
-                                onClick = onExecute,
-                                enabled = commandInput.isNotBlank() && envInstalled && !isConnecting,
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .background(
-                                        color = if (commandInput.isNotBlank() && envInstalled && !isConnecting) promptColor else Color(0xFF30363D),
-                                        shape = RoundedCornerShape(10.dp)
-                                    )
-                            ) {
-                                Icon(
-                                    Icons.Default.KeyboardReturn,
-                                    contentDescription = "Execute",
-                                    tint = Color.Black
-                                )
-                            }
-                        }
-                    }
-
                     Text(
-                        text = terminalStatus.ifBlank { "Tip: 这是持久 SSH Shell，cd/交互式程序/流式输出都直接走会话。" },
+                        text = terminalStatus.ifBlank { "持久 SSH Shell 已启用，支持 ANSI 颜色、光标控制、交互式程序、Ctrl/Alt 组合键。" },
                         color = if (terminalError == null) Color(0xFF8B949E) else Color(0xFFFF7B72),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace
@@ -653,18 +545,13 @@ fun TerminalScreen(
                             fontFamily = FontFamily.Monospace
                         )
                     }
-                }
-
-                if (!envInstalled) {
-                    Text(
-                        "⚠️ Linux environment not installed. Please install it first.",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(Color.Yellow.copy(alpha = 0.2f))
-                            .padding(8.dp),
-                        color = Color.Yellow,
-                        style = MaterialTheme.typography.labelSmall
-                    )
+                    if (!envInstalled) {
+                        Text(
+                            "⚠️ Linux environment not installed. Please install it first.",
+                            color = Color.Yellow,
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
                 }
             }
         }
