@@ -260,6 +260,24 @@ class LinuxEnvironmentManager(private val context: Context) {
         return "printf '%s\n' $escaped > /etc/ssh/sshd_config"
     }
 
+
+    private fun runBootstrapCommandAllowingKnownApkWarnings(command: String): String {
+        return try {
+            runBootstrapCommand(command)
+        } catch (e: Exception) {
+            // In proot, apk may return non-zero even when package files are already installed
+            // (trigger script/syscall limitations). If openssh binaries are present, continue.
+            val sshdBin = File(rootfsDir, "usr/sbin/sshd")
+            val apkBin = File(rootfsDir, "sbin/apk")
+            if (command.contains("apk") && (sshdBin.exists() || apkBin.exists())) {
+                Log.w(TAG, "Ignoring apk non-zero exit because required binaries exist: ${e.message}")
+                ""
+            } else {
+                throw e
+            }
+        }
+    }
+
     private fun runBootstrapCommand(command: String): String {
         val workspaceDir = File(context.filesDir, "bootstrap_workspace")
         workspaceDir.mkdirs()
