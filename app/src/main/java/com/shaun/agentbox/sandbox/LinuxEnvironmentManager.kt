@@ -203,7 +203,7 @@ class LinuxEnvironmentManager(private val context: Context) {
         val token = UUID.randomUUID().toString().replace("-", "")
         val comment = "agentbox-$token"
 
-        runBootstrapCommand("apk update && apk add --no-cache openssh")
+        runBootstrapCommandAllowingKnownApkWarnings("apk update && apk add --no-cache openssh")
         runBootstrapCommand("mkdir -p /var/run /run/sshd /root/.ssh /etc/ssh")
         runBootstrapCommand("chmod 700 /root/.ssh")
         runBootstrapCommand("ssh-keygen -A")
