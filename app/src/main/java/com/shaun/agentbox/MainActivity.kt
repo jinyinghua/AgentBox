@@ -856,30 +856,31 @@ fun MultiAgentBoardScreen(
     runtimeManager: MultiAgentRuntimeManager,
     onBack: () -> Unit
 ) {
-    val scope = rememberCoroutineScope()
     var sessions by remember { mutableStateOf<List<MultiAgentSession>>(emptyList()) }
     var selectedSessionId by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var runtimeSnapshots by remember { mutableStateOf<Map<String, MultiAgentRuntimeSnapshot>>(emptyMap()) }
+    var refreshNonce by remember { mutableIntStateOf(0) }
 
-    fun refresh() {
-        scope.launch {
-            isLoading = true
-            errorMessage = null
-            try {
-                sessions = manager.listSessions()
-                runtimeSnapshots = runtimeManager.listRuntimes().associateBy { it.sessionId }
-            } catch (e: Exception) {
-                errorMessage = e.message
-            } finally {
-                isLoading = false
-            }
+    suspend fun refresh() {
+        isLoading = true
+        errorMessage = null
+        try {
+            sessions = manager.listSessions()
+            runtimeSnapshots = runtimeManager.listRuntimes().associateBy { it.sessionId }
+        } catch (e: Exception) {
+            errorMessage = e.message
+        } finally {
+            isLoading = false
         }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(refreshNonce) {
         refresh()
+    }
+
+    LaunchedEffect(Unit) {
         while (true) {
             delay(2000)
             refresh()
@@ -914,7 +915,7 @@ fun MultiAgentBoardScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { refresh() }) {
+                    IconButton(onClick = { refreshNonce++ }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
                 }
