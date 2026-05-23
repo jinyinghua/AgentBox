@@ -50,7 +50,12 @@ fun SshTerminalView(
     }
 
     LaunchedEffect(shellSession, terminalSession) {
-        terminalClient.start(shellSession, terminalSession)
+        try {
+            terminalClient.start(shellSession, terminalSession)
+        } catch (e: Exception) {
+            onError(e.message ?: "Terminal session failed")
+            onStatusChange("Shell disconnected")
+        }
     }
 
     AndroidView(
@@ -95,9 +100,15 @@ private class AgentBoxTerminalSessionClient(
         started = true
         onStatusChange("Connected to local proot shell")
         session.setShellSession(shellSession)
-        session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
-        session.write("cd /workspace\n")
-        session.write("clear\n")
+        try {
+            session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
+            session.write("cd /workspace\n")
+            session.write("clear\n")
+        } catch (e: Exception) {
+            onError(e.message ?: "Terminal initialization failed")
+            onStatusChange("Shell disconnected")
+            return
+        }
         while (started && shellSession.isConnected()) {
             val chunk = try {
                 shellSession.readAvailable()

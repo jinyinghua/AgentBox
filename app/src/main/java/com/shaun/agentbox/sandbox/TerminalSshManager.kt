@@ -75,9 +75,8 @@ class TerminalSshManager(private val context: Context) {
             runCatching { process.outputStream.flush() }
             runCatching { process.outputStream.close() }
             runCatching { process.destroy() }
-            runCatching { process.waitFor() }
-            if (process.isAlive) {
-                runCatching { process.destroyForcibly() }
+            runCatching {
+                if (process.isAlive) process.destroyForcibly()
             }
         }
     }

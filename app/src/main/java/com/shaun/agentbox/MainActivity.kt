@@ -514,7 +514,7 @@ fun TerminalScreen(
                             Spacer(Modifier.height(12.dp))
                         }
                         Text(
-                            text = if (isConnecting) "Connecting to SSH shell..." else (terminalError ?: terminalStatus),
+                            text = if (isConnecting) "Connecting to local shell..." else (terminalError ?: terminalStatus),
                             color = if (terminalError == null) Color(0xFF8B949E) else Color(0xFFFF7B72),
                             fontFamily = FontFamily.Monospace
                         )
@@ -532,7 +532,7 @@ fun TerminalScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Text(
-                        text = terminalStatus.ifBlank { "持久 SSH Shell 已启用，支持 ANSI 颜色、光标控制、交互式程序、Ctrl/Alt 组合键。命令串联请用 &&，单个 & 在 shell 中表示后台执行。" },
+                        text = terminalStatus.ifBlank { "本地 proot Shell 已启用。当前版本绕开 sshd，直接连接 /bin/sh。命令串联请用 &&，单个 & 在 shell 中表示后台执行。" },
                         color = if (terminalError == null) Color(0xFF8B949E) else Color(0xFFFF7B72),
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace

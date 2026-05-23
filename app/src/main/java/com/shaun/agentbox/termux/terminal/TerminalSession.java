@@ -5,7 +5,7 @@ import com.shaun.agentbox.sandbox.TerminalShellSession;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Lightweight terminal session backed by the app's persistent SSH shell.
+ * Lightweight terminal session backed by the app's local proot shell.
  * It mimics the small subset of Termux TerminalSession API that TerminalView needs.
  */
 public class TerminalSession extends TerminalOutput {
@@ -106,7 +106,7 @@ public class TerminalSession extends TerminalOutput {
         try {
             mShellSession.writeBytes(data, offset, count);
         } catch (Exception e) {
-            if (mClient != null) mClient.logStackTraceWithMessage("TerminalSession", "Failed writing to SSH shell", e);
+            if (mClient != null) mClient.logStackTraceWithMessage("TerminalSession", "Failed writing to local shell", e);
         }
     }
 

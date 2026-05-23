@@ -50,14 +50,14 @@ class TerminalShellSession(
     fun isConnected(): Boolean = process.isAlive
 
     fun close() {
+        // Must be non-blocking: close() is sometimes called from Compose disposal on main thread.
         runCatching { outputStream.write("exit\n".toByteArray()) }
         runCatching { outputStream.flush() }
         runCatching { outputStream.close() }
         runCatching { inputStream.close() }
         runCatching { process.destroy() }
-        runCatching { process.waitFor() }
-        if (process.isAlive) {
-            runCatching { process.destroyForcibly() }
+        runCatching {
+            if (process.isAlive) process.destroyForcibly()
         }
     }
 }
