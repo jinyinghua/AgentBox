@@ -135,6 +135,7 @@ public final class TerminalView extends View {
 
     public TerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
+        ensureRenderer();
         mGestureRecognizer = new GestureAndScaleRecognizer(context, new GestureAndScaleRecognizer.Listener() {
 
             boolean scrolledWithFinger;
@@ -980,11 +981,18 @@ public final class TerminalView extends View {
         updateSize();
     }
 
+    private void ensureRenderer() {
+        if (mRenderer == null) {
+            mRenderer = new TerminalRenderer(14, Typeface.MONOSPACE);
+        }
+    }
+
     /** Check if the terminal size in rows and columns should be updated. */
     public void updateSize() {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         if (viewWidth == 0 || viewHeight == 0 || mTermSession == null) return;
+        ensureRenderer();
 
         // Set to 80 and 24 if you want to enable vttest.
         int newColumns = Math.max(4, (int) (viewWidth / mRenderer.mFontWidth));
@@ -993,7 +1001,7 @@ public final class TerminalView extends View {
         if (mEmulator == null || (newColumns != mEmulator.mColumns || newRows != mEmulator.mRows)) {
             mTermSession.updateSize(newColumns, newRows, (int) mRenderer.getFontWidth(), mRenderer.getFontLineSpacing());
             mEmulator = mTermSession.getEmulator();
-            mClient.onEmulatorSet();
+            if (mClient != null) mClient.onEmulatorSet();
 
             // Update mTerminalCursorBlinkerRunnable inner class mEmulator on session change
             if (mTerminalCursorBlinkerRunnable != null)
