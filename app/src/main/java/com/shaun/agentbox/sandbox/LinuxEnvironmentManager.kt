@@ -87,7 +87,8 @@ class LinuxEnvironmentManager(private val context: Context) {
             sshPublicKeyFile.exists() &&
             File(rootfsDir, "root/.ssh/authorized_keys").exists() &&
             File(rootfsDir, "usr/sbin/sshd").exists() &&
-            File(rootfsDir, "etc/ssh/sshd_config").exists()
+            File(rootfsDir, "etc/ssh/sshd_config").exists() &&
+            File(rootfsDir, "etc/ssh/ssh_host_rsa_key").exists()
     }
 
     suspend fun ensureSshPrepared() = withContext(Dispatchers.IO) {
@@ -129,10 +130,10 @@ class LinuxEnvironmentManager(private val context: Context) {
             grep -q '^sshd:' /etc/passwd 2>/dev/null || echo 'sshd:x:22:22:sshd privsep:/var/empty:/sbin/nologin' >> /etc/passwd
             grep -q '^sshd:' /etc/group 2>/dev/null || echo 'sshd:x:22:' >> /etc/group
             [ -f /sbin/nologin ] || ln -sf /bin/false /sbin/nologin
-            [ -f /etc/ssh/ssh_host_rsa_key ] || /usr/bin/ssh-keygen -A
+            [ -f /etc/ssh/ssh_host_rsa_key ] || /usr/bin/ssh-keygen -A || ssh-keygen -A
             chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null || true
             chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null || true
-         rhd.log    /ig -h /etc/ssh/ssh_host_rsa_key -p $SSH_PORT -o PidFile=/var/run/sshd.pid 2>/tmp/agentbox-sshd-test.log
+            /usr/sbin/sshd -t -f /etc/ssh/sshd_config -h /etc/ssh/ssh_host_rsa_key -p $SSH_PORT -o PidFile=/var/run/sshd.pid 2>/tmp/agentbox-sshd-test.log
             tcode=$?
             if [ $tcode -ne 0 ]; then
               echo "sshd config test failed (exit $tcode)" >&2
