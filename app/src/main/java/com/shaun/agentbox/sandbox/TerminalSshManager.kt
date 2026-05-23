@@ -93,11 +93,17 @@ class TerminalSshManager(private val context: Context) {
                 val output = runCatching {
                     process.inputStream.bufferedReader().use { it.readText() }
                 }.getOrDefault("")
-                throw IllegalStateException("sshd failed to start. $output")
+                val logOutput = runCatching {
+                    linuxManager.getSshdLogFile().takeIf { it.exists() }?.readText().orEmpty()
+                }.getOrDefault("")
+                throw IllegalStateException("sshd failed to start. " + listOf(output, logOutput).filter { it.isNotBlank() }.joinToString("\n"))
             }
             delay(200)
         }
-        throw IllegalStateException("Timed out waiting for sshd to start.")
+        val logOutput = runCatching {
+            linuxManager.getSshdLogFile().takeIf { it.exists() }?.readText().orEmpty()
+        }.getOrDefault("")
+        throw IllegalStateException("Timed out waiting for sshd to start." + if (logOutput.isNotBlank()) "\n$logOutput" else "")
     }
 
     private fun isServerAlive(): Boolean {

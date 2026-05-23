@@ -79,6 +79,8 @@ class LinuxEnvironmentManager(private val context: Context) {
     fun getSshUser(): String = SSH_USER
     fun getSshPrivateKeyFile(): File = sshPrivateKeyFile
 
+    fun getSshdLogFile(): File = File(rootfsDir, "tmp/agentbox-sshd.log")
+
     fun isSshPrepared(): Boolean {
         return isInstalled &&
             sshPrivateKeyFile.exists() &&
@@ -90,9 +92,12 @@ class LinuxEnvironmentManager(private val context: Context) {
 
     suspend fun ensureSshPrepared() = withContext(Dispatchers.IO) {
         check(isInstalled) { "Linux environment not installed." }
-        if (isSshPrepared()) return@withContext
         setupDns()
-        setupOpenSsh()
+        if (!isSshPrepared()) {
+            setupOpenSsh()
+        } else {
+            setupSshdConfigAndAccounts()
+        }
     }
 
     fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {
@@ -124,8 +129,17 @@ class LinuxEnvironmentManager(private val context: Context) {
             grep -q '^sshd:' /etc/passwd 2>/dev/null || echo 'sshd:x:22:22:sshd privsep:/var/empty:/sbin/nologin' >> /etc/passwd
             grep -q '^sshd:' /etc/group 2>/dev/null || echo 'sshd:x:22:' >> /etc/group
             [ -f /sbin/nologin ] || ln -sf /bin/false /sbin/nologin
-            mkdir -p /run/sshd
-            exec /usr/sbin/sshd -D -e -f /etc/ssh/sshd_config -p $SSH_PORT -h /etc/ssh/ssh_host_rsa_key -o PidFile=/var/run/sshd.pid
+            [ -f /etc/ssh/ssh_host_rsa_key ] || /usr/bin/ssh-keygen -A
+            chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null || true
+            chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null || true
+         rhd.log    /ig -h /etc/ssh/ssh_host_rsa_key -p $SSH_PORT -o PidFile=/var/run/sshd.pid 2>/tmp/agentbox-sshd-test.log
+            tcode=$?
+            if [ $tcode -ne 0 ]; then
+              echo "sshd config test failed (exit $tcode)" >&2
+              cat /tmp/agentbox-sshd-test.log >&2 2>/dev/null
+              exit 111
+            fi
+            exec /usr/sbin/sshd -D -e -E /tmp/agentbox-sshd.log -f /etc/ssh/sshd_config -p $SSH_PORT -h /etc/ssh/ssh_host_rsa_key -o PidFile=/var/run/sshd.pid
         """.trimIndent()
 
         return arrayOf(
@@ -209,6 +223,7 @@ class LinuxEnvironmentManager(private val context: Context) {
         val comment = "agentbox-$token"
 
         runBootstrapCommandAllowingKnownApkWarnings("apk update && apk add --no-cache openssh")
+        setupSshdConfigAndAccounts()
         runBootstrapCommand("mkdir -p /var/run /run/sshd /root/.ssh /etc/ssh")
         runBootstrapCommand("chmod 700 /root/.ssh")
         runBootstrapCommand("ssh-keygen -A")
@@ -239,32 +254,77 @@ class LinuxEnvironmentManager(private val context: Context) {
         )
     }
 
-    private fun buildSshdConfigScript(): String {
-        val config = """
+    private fun setupSshdConfigAndAccounts() {
+        val etcDir = File(rootfsDir, "etc")
+        val sshDir = File(etcDir, "ssh")
+        val rootSshDir = File(rootfsDir, "root/.ssh")
+        val runSshdDir = File(rootfsDir, "run/sshd")
+        val varRunSshdDir = File(rootfsDir, "var/run/sshd")
+        val varEmptyDir = File(rootfsDir, "var/empty")
+        val varEmptySshdDir = File(rootfsDir, "var/empty/sshd")
+        sshDir.mkdirs()
+        rootSshDir.mkdirs()
+        runSshdDir.mkdirs()
+        varRunSshdDir.mkdirs()
+        varEmptyDir.mkdirs()
+        varEmptySshdDir.mkdirs()
+        rootSshDir.setReadable(true, false)
+        rootSshDir.setWritable(true, false)
+        rootSshDir.setExecutable(true, false)
+
+        val passwd = File(etcDir, "passwd")
+        if (!passwd.exists()) passwd.writeText("root:x:0:0:root:/root:/bin/sh\n")
+        ensureLine(passwd, "sshd:", "sshd:x:22:22:sshd privsep:/var/empty:/sbin/nologin")
+
+        val group = File(etcDir, "group")
+        if (!group.exists()) group.writeText("root:x:0:\n")
+        ensureLine(group, "sshd:", "sshd:x:22:")
+
+        val nologin = File(rootfsDir, "sbin/nologin")
+        if (!nologin.exists()) {
+            nologin.parentFile?.mkdirs()
+            runCatching { Os.symlink("/bin/false", nologin.absolutePath) }
+        }
+
+        File(sshDir, "sshd_config").writeText(buildSshdConfigText())
+        File(rootfsDir, "tmp").mkdirs()
+    }
+
+    private fun ensureLine(file: File, prefix: String, line: String) {
+        val lines = if (file.exists()) file.readLines().toMutableList() else mutableListOf()
+        if (lines.none { it.startsWith(prefix) }) {
+            lines.add(line)
+            file.writeText(lines.joinToString("\n") + "\n")
+        }
+    }
+
+    private fun buildSshdConfigText(): String {
+        return """
             Port $SSH_PORT
             ListenAddress 127.0.0.1
-            Protocol 2
             HostKey /etc/ssh/ssh_host_rsa_key
             PasswordAuthentication no
-            KbdInteractiveAuthentication no
-            ChallengeResponseAuthentication no
-            PermitRootLogin prohibit-password
+            PermitEmptyPasswords no
+            PermitRootLogin yes
             PubkeyAuthentication yes
-            AuthorizedKeysFile /root/.ssh/authorized_keys
+            AuthorizedKeysFile .ssh/authorized_keys
+            StrictModes no
             PidFile /var/run/sshd.pid
             PrintMotd no
-            UsePAM no
             PermitTTY yes
             X11Forwarding no
             AllowTcpForwarding no
             ClientAliveInterval 30
             ClientAliveCountMax 3
+            LogLevel DEBUG3
             Subsystem sftp internal-sftp
-        """.trimIndent()
-        val escaped = shellEscape(config)
-        return "printf '%s\n' $escaped > /etc/ssh/sshd_config"
+        """.trimIndent() + "\n"
     }
 
+    private fun buildSshdConfigScript(): String {
+        val escaped = shellEscape(buildSshdConfigText())
+        return "printf '%s\n' $escaped > /etc/ssh/sshd_config"
+    }
 
     private fun runBootstrapCommandAllowingKnownApkWarnings(command: String): String {
         return try {
