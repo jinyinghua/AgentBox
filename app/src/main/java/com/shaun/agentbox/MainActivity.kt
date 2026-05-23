@@ -214,12 +214,12 @@ fun AgentBoxApp() {
 
             isTerminalConnecting = true
             terminalError = null
-            terminalStatus = "Starting OpenSSH daemon..."
+            terminalStatus = "Starting local proot shell..."
             try {
                 val session = terminalSshManager.openShell(sandboxManager.workspaceDir)
                 terminalSession?.close()
                 terminalSession = session
-                terminalStatus = "Connected to persistent SSH shell"
+                terminalStatus = "Connected to local proot shell"
             } catch (e: Exception) {
                 terminalSession?.close()
                 terminalSession = null

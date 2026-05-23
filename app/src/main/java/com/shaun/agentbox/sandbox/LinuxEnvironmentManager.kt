@@ -64,8 +64,7 @@ class LinuxEnvironmentManager(private val context: Context) {
             onProgress(70, "Setting up DNS and shell environment...")
             setupDns()
 
-            onProgress(80, "Installing OpenSSH and generating login credentials...")
-            setupOpenSsh()
+            onProgress(80, "Finalizing local shell environment...")
 
             onProgress(100, "Alpine Linux environment is ready!")
         } catch (e: Exception) {

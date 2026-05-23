@@ -93,7 +93,7 @@ private class AgentBoxTerminalSessionClient(
     suspend fun start(shellSession: TerminalShellSession, session: TerminalSession) {
         if (started) return
         started = true
-        onStatusChange("Connected to persistent SSH shell")
+        onStatusChange("Connected to local proot shell")
         session.setShellSession(shellSession)
         session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
         session.write("cd /workspace\n")
@@ -103,7 +103,7 @@ private class AgentBoxTerminalSessionClient(
                 shellSession.readAvailable()
             } catch (e: Exception) {
                 onError(e.message ?: "Terminal read failed")
-                onStatusChange("Terminal disconnected")
+                onStatusChange("Shell disconnected")
                 break
             }
             if (chunk.isNotEmpty()) {
@@ -111,7 +111,7 @@ private class AgentBoxTerminalSessionClient(
             }
             kotlinx.coroutines.delay(16)
         }
-        onStatusChange("Terminal disconnected")
+        onStatusChange("Shell disconnected")
     }
 
     override fun onTextChanged(changedSession: TerminalSession) = Unit
