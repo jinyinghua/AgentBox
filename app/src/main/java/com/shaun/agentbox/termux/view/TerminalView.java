@@ -53,7 +53,7 @@ public final class TerminalView extends View {
     /** Our terminal emulator whose session is {@link #mTermSession}. */
     public TerminalEmulator mEmulator;
 
-    public TerminalRenderer mRenderer;
+    public TerminalRenderer mRenderer = new TerminalRenderer(14, Typeface.MONOSPACE);
 
     public TerminalViewClient mClient;
 
