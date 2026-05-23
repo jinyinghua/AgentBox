@@ -64,14 +64,22 @@ fun SshTerminalView(
                 setTerminalViewClient(terminalClient)
                 attachSession(terminalSession)
                 setKeepScreenOn(true)
-                requestFocus()
+                isFocusable = true
+                isFocusableInTouchMode = true
+                isClickable = true
+                setOnClickListener { showSoftKeyboard() }
+                setOnTouchListener { view, _ ->
+                    (view as? TerminalView)?.showSoftKeyboard()
+                    false
+                }
+                showSoftKeyboard()
             }
         },
         modifier = modifier.fillMaxSize(),
         update = { view ->
             view.setTerminalViewClient(terminalClient)
             view.attachSession(terminalSession)
-            view.requestFocus()
+            view.showSoftKeyboard()
         }
     )
 }
@@ -164,7 +172,7 @@ private class AgentBoxTerminalSessionClient(
 
     override fun shouldBackButtonBeMappedToEscape(): Boolean = true
 
-    override fun shouldEnforceCharBasedInput(): Boolean = false
+    override fun shouldEnforceCharBasedInput(): Boolean = true
 
     override fun shouldUseCtrlSpaceWorkaround(): Boolean = false
 

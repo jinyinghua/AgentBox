@@ -32,6 +32,7 @@ import android.view.autofill.AutofillValue;
 import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Scroller;
 
 import androidx.annotation.Nullable;
@@ -136,6 +137,9 @@ public final class TerminalView extends View {
     public TerminalView(Context context, AttributeSet attributes) { // NO_UCD (unused code)
         super(context, attributes);
         ensureRenderer();
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        setClickable(true);
         mGestureRecognizer = new GestureAndScaleRecognizer(context, new GestureAndScaleRecognizer.Listener() {
 
             boolean scrolledWithFinger;
@@ -162,7 +166,7 @@ public final class TerminalView extends View {
                     stopTextSelectionMode();
                     return true;
                 }
-                requestFocus();
+                showSoftKeyboard();
                 mClient.onSingleTapUp(event);
                 return true;
             }
@@ -985,6 +989,20 @@ public final class TerminalView extends View {
         if (mRenderer == null) {
             mRenderer = new TerminalRenderer(14, Typeface.MONOSPACE);
         }
+    }
+
+    public void showSoftKeyboard() {
+        requestFocus();
+        post(new Runnable() {
+            @Override
+            public void run() {
+                requestFocus();
+                InputMethodManager imm = (InputMethodManager) getContext().getSystemService(Context.INPUT_METHOD_SERVICE);
+                if (imm != null) {
+                    imm.showSoftInput(TerminalView.this, InputMethodManager.SHOW_IMPLICIT);
+                }
+            }
+        });
     }
 
     /** Check if the terminal size in rows and columns should be updated. */
