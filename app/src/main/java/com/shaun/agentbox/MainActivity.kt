@@ -5,6 +5,9 @@ import android.os.Bundle
 import android.util.Log
 import android.provider.Settings
 import android.net.Uri
+import com.shaun.agentbox.ui.DisguisedAudioKeepAliveService
+import com.shaun.agentbox.ui.FloatingFeatureConfig
+import com.shaun.agentbox.ui.FloatingFeatureOptions
 import com.shaun.agentbox.ui.FloatingWindowService
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -81,6 +84,7 @@ fun AgentBoxApp() {
     val backupManager = remember { SandboxBackupManager(context) }
     val aiTeacherManager = remember { AiTeacherManager(context) }
     val terminalSshManager = remember { TerminalSshManager(context) }
+    val floatingFeatureConfig = remember { FloatingFeatureConfig(context) }
     val multiAgentManager = remember { MultiAgentManager(context) }
     val multiAgentRuntimeManager = remember { MultiAgentRuntimeManager.getInstance(context) }
     val subAgentConfigManager = remember { SubAgentModelConfigManager(context) }
@@ -91,16 +95,22 @@ fun AgentBoxApp() {
     var isInstalling by remember { mutableStateOf(false) }
     var isRunning by remember { mutableStateOf(McpService.isRunning) }
     var isFloatingRunning by remember { mutableStateOf(FloatingWindowService.isRunning) }
+    var isAudioKeepAliveRunning by remember { mutableStateOf(DisguisedAudioKeepAliveService.isRunning) }
     var serverAddress by remember { mutableStateOf("") }
     var showSettings by remember { mutableStateOf(false) }
     var showSubAgentSettings by remember { mutableStateOf(false) }
+    var showFloatingFeatureSettings by remember { mutableStateOf(false) }
     var showTerminal by remember { mutableStateOf(false) }
     var showMultiAgentBoard by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
+        if (floatingFeatureConfig.load().disguisedAudioKeepAlive && !DisguisedAudioKeepAliveService.isRunning) {
+            context.startForegroundService(Intent(context, DisguisedAudioKeepAliveService::class.java))
+        }
         while (true) {
             isRunning = McpService.isRunning
             isFloatingRunning = FloatingWindowService.isRunning
+            isAudioKeepAliveRunning = DisguisedAudioKeepAliveService.isRunning
             if (isRunning) {
                 serverAddress = "http://${McpService.getLocalIpAddress()}:${McpService.PORT}/sse"
             }
@@ -188,6 +198,35 @@ fun AgentBoxApp() {
         SubAgentSettingsScreen(
             manager = subAgentConfigManager,
             onBack = { showSubAgentSettings = false }
+        )
+        return@AgentBoxApp
+    }
+
+    if (showFloatingFeatureSettings) {
+        FloatingFeatureSettingsScreen(
+            config = floatingFeatureConfig,
+            isFloatingRunning = isFloatingRunning,
+            isAudioKeepAliveRunning = isAudioKeepAliveRunning,
+            onOptionsChanged = { options ->
+                if (FloatingWindowService.isRunning) {
+                    context.startService(
+                        Intent(context, FloatingWindowService::class.java).apply {
+                            action = FloatingWindowService.ACTION_OPTIONS_CHANGED
+                        }
+                    )
+                }
+                val audioIntent = Intent(context, DisguisedAudioKeepAliveService::class.java)
+                if (options.disguisedAudioKeepAlive) {
+                    if (!DisguisedAudioKeepAliveService.isRunning) {
+                        context.startForegroundService(audioIntent)
+                    }
+                } else {
+                    context.stopService(audioIntent)
+                }
+                isFloatingRunning = FloatingWindowService.isRunning
+                isAudioKeepAliveRunning = DisguisedAudioKeepAliveService.isRunning
+            },
+            onBack = { showFloatingFeatureSettings = false }
         )
         return@AgentBoxApp
     }
@@ -304,6 +343,11 @@ fun AgentBoxApp() {
                                 text = { Text("Multi-Agent Board") },
                                 onClick = { showMenu = false; showMultiAgentBoard = true },
                                 leadingIcon = { Icon(Icons.Default.List, null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Floating / Keep Alive Options") },
+                                onClick = { showMenu = false; showFloatingFeatureSettings = true },
+                                leadingIcon = { Icon(Icons.Default.Tune, null) }
                             )
                             HorizontalDivider()
                             DropdownMenuItem(
@@ -809,6 +853,148 @@ fun SubAgentSettingsScreen(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FloatingFeatureSettingsScreen(
+    config: FloatingFeatureConfig,
+    isFloatingRunning: Boolean,
+    isAudioKeepAliveRunning: Boolean,
+    onOptionsChanged: (FloatingFeatureOptions) -> Unit,
+    onBack: () -> Unit
+) {
+    var options by remember { mutableStateOf(config.load()) }
+
+    fun save(next: FloatingFeatureOptions) {
+        options = next
+        config.save(next)
+        onOptionsChanged(next)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Floating / Keep Alive Options")
+                        Text(
+                            "Real overlay style and foreground keep-alive controls",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                ElevatedCard {
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("Runtime status", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "Floating window: ${if (isFloatingRunning) "running" else "stopped"} · Audio keep-alive: ${if (isAudioKeepAliveRunning) "running" else "stopped"}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "修改圆形/透明选项后，已打开的悬浮窗会立即刷新；透明悬浮窗是 1px 角落隐身模式，基本按不到，主要靠回到 App 设置页恢复。音频保活开关会立即启动或停止前台静音播放服务。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            item {
+                FeatureSwitchCard(
+                    title = "圆形悬浮窗",
+                    description = "启用后使用 54dp 圆形按钮；关闭后变成胶囊控制条并显示 MCP ON/OFF 状态文字。",
+                    checked = options.circularFloatingWindow,
+                    icon = Icons.Default.Circle,
+                    onCheckedChange = { save(options.copy(circularFloatingWindow = it)) }
+                )
+            }
+
+            item {
+                FeatureSwitchCard(
+                    title = "透明悬浮窗",
+                    description = "隐身角落模式：悬浮窗缩到 1px，自动塞到右上圆角边缘，alpha 降到 5%，视觉上基本消失。需要恢复时从 App 设置里关闭此项。",
+                    checked = options.transparentFloatingWindow,
+                    icon = Icons.Default.Opacity,
+                    onCheckedChange = { save(options.copy(transparentFloatingWindow = it)) }
+                )
+            }
+
+            item {
+                FeatureSwitchCard(
+                    title = "伪装音频播放保活",
+                    description = "启动独立前台服务，使用 AudioTrack 循环写入静音 PCM，通知栏表现为音频会话，用来提高后台存活概率。",
+                    checked = options.disguisedAudioKeepAlive,
+                    icon = Icons.Default.GraphicEq,
+                    onCheckedChange = { save(options.copy(disguisedAudioKeepAlive = it)) }
+                )
+            }
+
+            item {
+                AssistChip(
+                    onClick = {},
+                    label = { Text("注意：Android 厂商后台策略差异很大，保活不能保证绝对不被杀。") },
+                    leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FeatureSwitchCard(
+    title: String,
+    description: String,
+    checked: Boolean,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ElevatedCard {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onCheckedChange(!checked) }
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
         }
     }
 }
