@@ -134,9 +134,9 @@ class LinuxEnvironmentManager(private val context: Context) {
             chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null || true
             chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null || true
             /usr/sbin/sshd -t -f /etc/ssh/sshd_config -h /etc/ssh/ssh_host_rsa_key -p $SSH_PORT -o PidFile=/var/run/sshd.pid 2>/tmp/agentbox-sshd-test.log
-            tcode=$?
-            if [ $tcode -ne 0 ]; then
-              echo "sshd config test failed (exit $tcode)" >&2
+            tcode=${'$'}?
+            if [ ${'$'}tcode -ne 0 ]; then
+              echo "sshd config test failed (exit ${'$'}tcode)" >&2
               cat /tmp/agentbox-sshd-test.log >&2 2>/dev/null
               exit 111
             fi
