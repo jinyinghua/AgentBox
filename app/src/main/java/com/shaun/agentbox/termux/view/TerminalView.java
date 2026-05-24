@@ -512,16 +512,6 @@ public final class TerminalView extends View {
     }
 
     @Override
-    public boolean isFocusable() {
-        return true;
-    }
-
-    @Override
-    public boolean isFocusableInTouchMode() {
-        return true;
-    }
-
-    @Override
     public boolean isOpaque() {
         return true;
     }
