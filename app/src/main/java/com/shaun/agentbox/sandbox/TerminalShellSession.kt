@@ -1,18 +1,20 @@
 package com.shaun.agentbox.sandbox
 
+import android.os.ParcelFileDescriptor
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * A lightweight interactive shell session backed directly by a proot process.
- *
- * We intentionally avoid running sshd inside Android/proot because Android's seccomp
- * filter kills OpenSSH on some devices with SIGSYS ("Bad system call").
+ * Interactive shell session backed by a native pseudo terminal.
  */
 class TerminalShellSession(
-    private val process: Process,
-    private val inputStream: InputStream,
-    private val outputStream: OutputStream
+    private val pid: Int,
+    private val readFd: ParcelFileDescriptor,
+    private val writeFd: ParcelFileDescriptor,
+    private val inputStream: InputStream = FileInputStream(readFd.fileDescriptor),
+    private val outputStream: OutputStream = FileOutputStream(writeFd.fileDescriptor)
 ) {
     private val writeLock = Any()
 
@@ -44,20 +46,19 @@ class TerminalShellSession(
     }
 
     fun resize(columns: Int, rows: Int, widthPx: Int = columns * 8, heightPx: Int = rows * 16) {
-        // No-op for pipe-backed process sessions. A real PTY would be needed for SIGWINCH.
+        NativePty.setWindowSize(writeFd.fd, rows, columns, widthPx, heightPx)
     }
 
-    fun isConnected(): Boolean = process.isAlive
+    fun isConnected(): Boolean = NativePty.isProcessAlive(pid)
 
     fun close() {
-        // Must be non-blocking: close() is sometimes called from Compose disposal on main thread.
         runCatching { outputStream.write("exit\n".toByteArray()) }
         runCatching { outputStream.flush() }
         runCatching { outputStream.close() }
         runCatching { inputStream.close() }
-        runCatching { process.destroy() }
-        runCatching {
-            if (process.isAlive) process.destroyForcibly()
-        }
+        runCatching { readFd.close() }
+        runCatching { writeFd.close() }
+        runCatching { NativePty.killProcess(pid, 15) }
+        runCatching { NativePty.killProcess(pid, 9) }
     }
 }

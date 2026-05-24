@@ -104,12 +104,6 @@ public class TerminalSession extends TerminalOutput {
     public void write(byte[] data, int offset, int count) {
         if (mShellSession == null || !mShellSession.isConnected() || data == null || count <= 0) return;
         try {
-            // Pipe-backed shells do not provide tty echo. Echo normal typed input locally.
-            if (offset >= 0 && offset < data.length && data[offset] != 27) {
-                byte[] echoed = new byte[count];
-                System.arraycopy(data, offset, echoed, 0, count);
-                appendOutput(echoed, count);
-            }
             mShellSession.writeBytes(data, offset, count);
         } catch (Exception e) {
             if (mClient != null) mClient.logStackTraceWithMessage("TerminalSession", "Failed writing to local shell", e);

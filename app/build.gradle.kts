@@ -47,6 +47,11 @@ android {
     buildFeatures {
         compose = true
     }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+        }
+    }
     lint {
         abortOnError = false
         checkReleaseBuilds = false
