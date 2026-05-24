@@ -109,9 +109,10 @@ private class AgentBoxTerminalSessionClient(
         onStatusChange("Connected to local proot shell")
         session.setShellSession(shellSession)
         try {
+            session.appendOutput("AgentBox local shell connected\r\n")
+            session.appendOutput("Type commands below. This build uses a pipe-backed shell, so prompt/echo is provided locally.\r\n\r\n")
             session.write("export HOME=/root USER=root LOGNAME=root TERM=xterm-256color\n")
             session.write("cd /workspace\n")
-            session.write("clear\n")
         } catch (e: Exception) {
             onError(e.message ?: "Terminal initialization failed")
             onStatusChange("Shell disconnected")
