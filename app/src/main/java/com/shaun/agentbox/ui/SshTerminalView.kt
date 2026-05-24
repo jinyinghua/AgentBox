@@ -72,14 +72,14 @@ fun SshTerminalView(
                     (view as? TerminalView)?.showSoftKeyboard()
                     false
                 }
-                showSoftKeyboard()
+                post { showSoftKeyboard() }
             }
         },
         modifier = modifier.fillMaxSize(),
         update = { view ->
             view.setTerminalViewClient(terminalClient)
             view.attachSession(terminalSession)
-            view.showSoftKeyboard()
+            view.requestFocus()
         }
     )
 }
