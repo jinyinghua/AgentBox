@@ -72,6 +72,7 @@ fun SshTerminalView(
                     (view as? TerminalView)?.showSoftKeyboard()
                     false
                 }
+                terminalClient.bindView(this)
                 post { showSoftKeyboard() }
             }
         },
@@ -79,6 +80,7 @@ fun SshTerminalView(
         update = { view ->
             view.setTerminalViewClient(terminalClient)
             view.attachSession(terminalSession)
+            terminalClient.bindView(view)
             view.requestFocus()
         }
     )
@@ -95,12 +97,20 @@ private class AgentBoxTerminalSessionClient(
     @Volatile
     private var started = false
 
+    @Volatile
+    private var terminalView: TerminalView? = null
+
     fun bindSession(session: TerminalSession) {
         session.updateTerminalSessionClient(this)
     }
 
+    fun bindView(view: TerminalView) {
+        terminalView = view
+    }
+
     fun unbind() {
         started = false
+        terminalView = null
     }
 
     suspend fun start(shellSession: TerminalShellSession, session: TerminalSession) {
@@ -132,7 +142,9 @@ private class AgentBoxTerminalSessionClient(
         onStatusChange("Shell disconnected")
     }
 
-    override fun onTextChanged(changedSession: TerminalSession) = Unit
+    override fun onTextChanged(changedSession: TerminalSession) {
+        terminalView?.postInvalidateOnAnimation()
+    }
 
     override fun onTitleChanged(changedSession: TerminalSession) {
         onTitleChange(changedSession.title ?: "Terminal")
