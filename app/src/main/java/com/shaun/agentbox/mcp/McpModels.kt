@@ -56,6 +56,8 @@ object McpTools {
     fun buildToolListResult(): JsonElement = buildJsonObject {
         putJsonArray("tools") {
             add(buildExecuteCommandDef())
+            add(buildCheckCommandOutputDef())
+            add(buildProcessRunningPidsDef())
             add(buildReadFileDef())
             add(buildModifyFileDef())
             add(buildAskAiTeacherDef())
@@ -75,13 +77,44 @@ object McpTools {
 
     private fun buildExecuteCommandDef() = buildJsonObject {
         put("name", "execute_command")
-        put("description", "Execute a shell command in the Alpine Linux sandbox. You have full root-like access. You can install new tools using 'apk add <package>'. Python3 and Git can be installed this way.")
+        put("description", "Execute a shell command in the Alpine Linux sandbox. You have full root-like access. You can install new tools using 'apk add <package>'. Python3 and Git can be installed this way. " +
+                "The command starts in the background; after ~5 seconds, the initial captured output along with a 'pid' is returned. " +
+                "The process continues running — use 'check_command_output' with the pid to retrieve subsequent output, " +
+                "or 'process_running_pids' to list all active background processes.")
         putJsonObject("inputSchema") {
             put("type", "object")
             putJsonObject("properties") {
                 putJsonObject("command") { put("type", "string") }
             }
             putJsonArray("required") { add(JsonPrimitive("command")) }
+        }
+    }
+
+    private fun buildCheckCommandOutputDef() = buildJsonObject {
+        put("name", "check_command_output")
+        put("description", "Retrieve new output from a background process started by 'execute_command'. " +
+                "Provide the pid returned by execute_command. Each call returns only the output generated since the last check. " +
+                "If the process has finished, is_completed will be true and exit_code will be set. " +
+                "Once all output is consumed and the process is done, the process record is automatically cleaned up.")
+        putJsonObject("inputSchema") {
+            put("type", "object")
+            putJsonObject("properties") {
+                putJsonObject("pid") {
+                    put("type", "number")
+                    put("description", "The process pid returned by execute_command")
+                }
+            }
+            putJsonArray("required") { add(JsonPrimitive("pid")) }
+        }
+    }
+
+    private fun buildProcessRunningPidsDef() = buildJsonObject {
+        put("name", "process_running_pids")
+        put("description", "List all pids of background processes that are still running (not yet completed). " +
+                "Returns an array of pids and a count. Useful for checking if any long-running tasks are still active.")
+        putJsonObject("inputSchema") {
+            put("type", "object")
+            putJsonObject("properties") {}
         }
     }
 

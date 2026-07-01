@@ -3,19 +3,34 @@ package com.shaun.agentbox.mcp
 import android.content.Context
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
 import com.shaun.agentbox.sandbox.SandboxManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * MCP Tool 执行器 (升级版：注入完整环境变量)
+ *
+ * execute_command 现在采用异步模式：
+ * 1) 启动进程后等待初始截获时间（5 秒），返回已捕获的输出 + pid。
+ * 2) 进程不会因超时而终止，后台继续捕获后续输出。
+ * 3) 可通过 check_command_output(pid) 获取新输出，
+ *    通过 process_running_pids() 列出所有未结束的进程。
  */
 class ToolExecutor(context: Context) {
 
@@ -27,10 +42,36 @@ class ToolExecutor(context: Context) {
     private val multiAgentRuntimeManager = MultiAgentRuntimeManager.getInstance(context)
 
     companion object {
-        private const val COMMAND_TIMEOUT_MS = 60_000L
+        private const val INITIAL_CAPTURE_TIMEOUT_MS = 5_000L
         private const val MAX_OUTPUT_LENGTH = 100_000
         private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+        /** 后台进程注册表，全局共享 */
+        private val runningProcesses = ConcurrentHashMap<Long, RunningProcess>()
+        private val pidCounter = AtomicLong(1L)
+        private val processScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+        /** 获取 pid 对应的进程信息（用于外部检查，如 SSH 管理） */
+        fun getProcess(pid: Long): RunningProcess? = runningProcesses[pid]
     }
+
+    /** 后台运行进程状态 */
+    data class RunningProcess(
+        val pid: Long,
+        val process: Process,
+        val command: String,
+        val startTime: Long,
+        /** 所有已捕获的输出（线程安全访问） */
+        val outputBuffer: StringBuilder = StringBuilder(MAX_OUTPUT_LENGTH),
+        /** 上次读取到的偏移量（用于增量读取） */
+        var lastReadOffset: Int = 0,
+        /** 进程是否已结束 */
+        var isCompleted: Boolean = false,
+        /** 进程退出码（结束时设置） */
+        var exitCode: Int? = null,
+        /** 捕获过程中的错误信息 */
+        var error: String? = null
+    )
 
     suspend fun executeTool(name: String, arguments: Map<String, JsonElement>): CallToolResult {
         return when (name) {
@@ -38,6 +79,14 @@ class ToolExecutor(context: Context) {
                 val command = arguments["command"]?.jsonPrimitive?.content
                     ?: return errorResult("Missing required argument: command")
                 executeCommand(command)
+            }
+            "check_command_output" -> {
+                val pid = arguments["pid"]?.jsonPrimitive?.longOrNull
+                    ?: return errorResult("Missing required argument: pid")
+                checkCommandOutput(pid)
+            }
+            "process_running_pids" -> {
+                processRunningPids()
             }
             "read_file" -> {
                 val path = arguments["path"]?.jsonPrimitive?.content
@@ -131,50 +180,183 @@ class ToolExecutor(context: Context) {
         }
     }
 
+    /**
+     * 异步执行命令：
+     * - 启动进程后立即启动后台读取协程
+     * - 等待 [INITIAL_CAPTURE_TIMEOUT_MS] 毫秒后返回已捕获的输出 + pid
+     * - 进程继续在后台运行，后续可通过 checkCommandOutput(pid) 获取新输出
+     */
     suspend fun executeCommand(command: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
             if (!linuxManager.isInstalled) {
                 return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
             }
 
-            withTimeout(COMMAND_TIMEOUT_MS) {
-                val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
-                val processBuilder = ProcessBuilder(*prootCmd)
-                    .directory(sandboxManager.workspaceDir)
-                    .redirectErrorStream(true)
+            val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
+            val processBuilder = ProcessBuilder(*prootCmd)
+                .directory(sandboxManager.workspaceDir)
+                .redirectErrorStream(true)
 
-                val env = processBuilder.environment()
-                env["PATH"] = LINUX_PATH
-                env["HOME"] = "/root"
-                env["USER"] = "root"
-                env["LOGNAME"] = "root"
-                env["TERM"] = "xterm-256color"
-                env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+            val env = processBuilder.environment()
+            env["PATH"] = LINUX_PATH
+            env["HOME"] = "/root"
+            env["USER"] = "root"
+            env["LOGNAME"] = "root"
+            env["TERM"] = "xterm-256color"
+            env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
 
-                val process = processBuilder.start()
-                val output = buildString {
+            val process = processBuilder.start()
+            val pid = pidCounter.getAndIncrement()
+
+            val runningProcess = RunningProcess(
+                pid = pid,
+                process = process,
+                command = command,
+                startTime = System.currentTimeMillis()
+            )
+            runningProcesses[pid] = runningProcess
+
+            // 后台持续读取进程输出（不阻塞 executeCommand 返回）
+            processScope.launch {
+                try {
                     process.inputStream.bufferedReader().use { reader ->
-                        var totalRead = 0
                         val buffer = CharArray(4096)
                         var read: Int
                         while (reader.read(buffer).also { read = it } != -1) {
-                            totalRead += read
-                            if (totalRead <= MAX_OUTPUT_LENGTH) append(buffer, 0, read)
+                            synchronized(runningProcess) {
+                                if (runningProcess.outputBuffer.length < MAX_OUTPUT_LENGTH) {
+                                    val remaining = MAX_OUTPUT_LENGTH - runningProcess.outputBuffer.length
+                                    val appendLen = minOf(remaining, read)
+                                    runningProcess.outputBuffer.append(buffer, 0, appendLen)
+                                }
+                            }
                         }
                     }
+                    // 流结束，等待进程退出
+                    val code = process.waitFor()
+                    synchronized(runningProcess) {
+                        runningProcess.exitCode = code
+                        runningProcess.isCompleted = true
+                    }
+                } catch (e: Exception) {
+                    synchronized(runningProcess) {
+                        runningProcess.error = e.message
+                        runningProcess.isCompleted = true
+                    }
                 }
-
-                val exitCode = process.waitFor()
-                CallToolResult(
-                    content = listOf(ToolContent(type = "text", text = if (output.isNotEmpty()) output else "")),
-                    isError = exitCode != 0
-                )
             }
+
+            // 等待初始截获时间，让后台读取协程先收集一些输出
+            delay(INITIAL_CAPTURE_TIMEOUT_MS)
+
+            // 提取初始输出并设置 lastReadOffset
+            val initialOutput: String
+            val isCompleted: Boolean
+            val exitCode: Int?
+            val processError: String?
+            synchronized(runningProcess) {
+                initialOutput = runningProcess.outputBuffer.toString()
+                runningProcess.lastReadOffset = initialOutput.length
+                isCompleted = runningProcess.isCompleted
+                exitCode = runningProcess.exitCode
+                processError = runningProcess.error
+            }
+
+            val resultJson = buildJsonObject {
+                put("pid", pid)
+                put("output", initialOutput)
+                put("is_completed", isCompleted)
+                if (exitCode != null) {
+                    put("exit_code", exitCode)
+                } else {
+                    put("exit_code", JsonNull)
+                }
+                if (processError != null) {
+                    put("error", processError)
+                }
+            }
+
+            return@withContext CallToolResult(
+                content = listOf(ToolContent(type = "text", text = resultJson.toString())),
+                isError = false
+            )
         } catch (e: Exception) {
             errorResult("Execution failed: ${e.message}")
         }
     }
 
+    /**
+     * 查看指定 pid 的后台进程是否有新输出。
+     * 每次调用只会返回上次检查之后的新内容。
+     * 如果进程已结束且所有输出已被读取，会自动从注册表中移除。
+     */
+    suspend fun checkCommandOutput(pid: Long): CallToolResult = withContext(Dispatchers.IO) {
+        val rp = runningProcesses[pid]
+            ?: return@withContext errorResult("No running process found with pid: $pid")
+
+        val newOutput: String
+        val isCompleted: Boolean
+        val exitCode: Int?
+        val processError: String?
+        synchronized(rp) {
+            val currentLen = rp.outputBuffer.length
+            newOutput = rp.outputBuffer.substring(rp.lastReadOffset, currentLen)
+            rp.lastReadOffset = currentLen
+            isCompleted = rp.isCompleted
+            exitCode = rp.exitCode
+            processError = rp.error
+        }
+
+        // 如果进程已结束且所有输出已被读取，从注册表移除
+        if (isCompleted && newOutput.isEmpty()) {
+            runningProcesses.remove(pid)
+        }
+
+        val resultJson = buildJsonObject {
+            put("pid", pid)
+            put("output", newOutput)
+            put("is_completed", isCompleted)
+            if (exitCode != null) {
+                put("exit_code", exitCode)
+            } else {
+                put("exit_code", JsonNull)
+            }
+            if (processError != null) {
+                put("error", processError)
+            }
+        }
+
+        CallToolResult(
+            content = listOf(ToolContent(type = "text", text = resultJson.toString())),
+            isError = false
+        )
+    }
+
+    /**
+     * 列出所有仍在后台运行的进程 pid 列表。
+     */
+    suspend fun processRunningPids(): CallToolResult = withContext(Dispatchers.IO) {
+        val activePids = runningProcesses.filter { (_, rp) ->
+            synchronized(rp) { !rp.isCompleted }
+        }.keys.toList()
+
+        val resultJson = buildJsonObject {
+            put("pids", buildJsonArray {
+                activePids.forEach { add(JsonPrimitive(it)) }
+            })
+            put("count", activePids.size)
+        }
+
+        CallToolResult(
+            content = listOf(ToolContent(type = "text", text = resultJson.toString())),
+            isError = false
+        )
+    }
+
+    /**
+     * 原阻塞式 executeCommand 保留为 executeCommandStreaming
+     * 供多 Agent 运行时内部使用。
+     */
     suspend fun executeCommandStreaming(
         command: String,
         onOutputChunk: (String) -> Unit
