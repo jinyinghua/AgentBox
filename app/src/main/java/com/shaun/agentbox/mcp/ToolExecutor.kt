@@ -11,7 +11,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -263,16 +262,16 @@ class ToolExecutor(context: Context) {
             }
 
             val resultJson = buildJsonObject {
-                put("pid", pid)
-                put("output", initialOutput)
-                put("is_completed", isCompleted)
+                put("pid", JsonPrimitive(pid))
+                put("output", JsonPrimitive(initialOutput))
+                put("is_completed", JsonPrimitive(isCompleted))
                 if (exitCode != null) {
-                    put("exit_code", exitCode)
+                    put("exit_code", JsonPrimitive(exitCode))
                 } else {
                     put("exit_code", JsonNull)
                 }
                 if (processError != null) {
-                    put("error", processError)
+                    put("error", JsonPrimitive(processError))
                 }
             }
 
@@ -313,16 +312,16 @@ class ToolExecutor(context: Context) {
         }
 
         val resultJson = buildJsonObject {
-            put("pid", pid)
-            put("output", newOutput)
-            put("is_completed", isCompleted)
+            put("pid", JsonPrimitive(pid))
+            put("output", JsonPrimitive(newOutput))
+            put("is_completed", JsonPrimitive(isCompleted))
             if (exitCode != null) {
-                put("exit_code", exitCode)
+                put("exit_code", JsonPrimitive(exitCode))
             } else {
                 put("exit_code", JsonNull)
             }
             if (processError != null) {
-                put("error", processError)
+                put("error", JsonPrimitive(processError))
             }
         }
 
@@ -344,7 +343,7 @@ class ToolExecutor(context: Context) {
             put("pids", buildJsonArray {
                 activePids.forEach { add(JsonPrimitive(it)) }
             })
-            put("count", activePids.size)
+            put("count", JsonPrimitive(activePids.size))
         }
 
         CallToolResult(
@@ -444,8 +443,8 @@ class ToolExecutor(context: Context) {
         try {
             val (sessionId, reply) = teacherManager.askTeacher(content, id)
             val resultText = buildJsonObject {
-                put("id", sessionId)
-                put("reply", reply)
+                put("id", JsonPrimitive(sessionId))
+                put("reply", JsonPrimitive(reply))
             }.toString()
             CallToolResult(content = listOf(ToolContent(type = "text", text = resultText)), isError = false)
         } catch (e: Exception) {
