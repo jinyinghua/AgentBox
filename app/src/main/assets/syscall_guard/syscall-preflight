@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+if [ "$#" -eq 0 ]; then
+  echo "Usage: syscall-preflight file..." >&2
+  exit 2
+fi
+rc=0
+for f in "$@"; do
+  if [ ! -e "$f" ]; then
+    echo "syscall-preflight: $f: not found" >&2
+    rc=2
+    continue
+  fi
+  echo "==> $f"
+  if ! command -v strings >/dev/null 2>&1; then
+    echo "  strings not found; cannot scan" >&2
+    rc=2
+    continue
+  fi
+  hits=$(strings "$f" 2>/dev/null | grep -E '(^|[^A-Za-z0-9_])(clone3|close_range|openat2|faccessat2|pidfd_open|pidfd_getfd|epoll_pwait2|landlock_create_ruleset|landlock_add_rule|landlock_restrict_self|memfd_secret|process_mrelease|fchmodat2)([^A-Za-z0-9_]|$)' | sort -u || true)
+  if [ -n "$hits" ]; then
+    echo "$hits" | sed 's/^/  warning: possible syscall reference: /'
+    rc=1
+  else
+    echo "  no obvious known-dangerous syscall names found by strings scan"
+  fi
+  if command -v file >/dev/null 2>&1; then
+    file "$f" | sed 's/^/  file: /'
+  fi
+done
+exit "$rc"

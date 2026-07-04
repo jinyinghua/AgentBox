@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+MODE="${AGENTBOX_SYSCALL_GUARD:-enosys}"
+case "${1:-}" in
+  --log) MODE=log; shift ;;
+  --enosys) MODE=enosys; shift ;;
+  --off) MODE=off; shift ;;
+  --help|-h)
+    cat <<USAGE
+Usage: syscall-guard [--log|--enosys|--off] command [args...]
+
+Optional LD_PRELOAD SIGSYS guard for Android/proot environments.
+Modes:
+  --log     log SIGSYS and then chain/default-exit
+  --enosys  return -ENOSYS for known fallback-safe syscalls
+  --off     run command without guard
+
+Environment:
+  AGENTBOX_SYSCALL_GUARD=off|log|enosys
+  AGENTBOX_SYSCALL_GUARD_LOG=/tmp/agentbox-syscall-guard.log
+USAGE
+    exit 0
+    ;;
+esac
+if [ "$#" -eq 0 ]; then
+  echo "syscall-guard: missing command. Try: syscall-guard --help" >&2
+  exit 2
+fi
+if [ "$MODE" = "off" ]; then
+  exec "$@"
+fi
+LIB="${AGENTBOX_SYSCALL_GUARD_LIB:-/usr/local/lib/agentbox/libsyscall_guard.so}"
+if [ ! -f "$LIB" ]; then
+  if command -v build-syscall-guard >/dev/null 2>&1; then
+    build-syscall-guard >&2 || true
+  fi
+fi
+if [ ! -f "$LIB" ]; then
+  echo "syscall-guard: $LIB not found." >&2
+  echo "Install compiler and build it:" >&2
+  echo "  apk add --no-cache build-base linux-headers" >&2
+  echo "  build-syscall-guard" >&2
+  exit 127
+fi
+export AGENTBOX_SYSCALL_GUARD="$MODE"
+export AGENTBOX_SYSCALL_GUARD_LOG="${AGENTBOX_SYSCALL_GUARD_LOG:-/tmp/agentbox-syscall-guard.log}"
+export LD_PRELOAD="$LIB${LD_PRELOAD:+:$LD_PRELOAD}"
+exec "$@"

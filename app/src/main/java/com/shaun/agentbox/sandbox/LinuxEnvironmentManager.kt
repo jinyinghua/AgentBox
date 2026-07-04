@@ -24,6 +24,7 @@ class LinuxEnvironmentManager(private val context: Context) {
         private const val TAG = "LinuxEnv"
         private const val PROOT_ASSET = "proot"
         private const val ALPINE_ASSET = "alpine.tar.gz"
+        private const val SYSCALL_GUARD_VERSION = "1"
         private const val SSH_PORT = 8022
         private const val SSH_USER = "root"
     }
@@ -103,6 +104,7 @@ class LinuxEnvironmentManager(private val context: Context) {
 
             onProgress(70, "Setting up DNS and shell environment...")
             setupDns()
+            installSyscallGuardAssetsIfNeeded(force = true)
 
             onProgress(80, "Finalizing local shell environment...")
 
@@ -141,6 +143,8 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {
+        runCatching { installSyscallGuardAssetsIfNeeded(force = false) }
+            .onFailure { Log.w(TAG, "Failed to install syscall guard assets", it) }
         return commonProotArgs() + arrayOf(
             "-b", "${workspaceDir.absolutePath}:/workspace",
             "-w", "/workspace",
@@ -149,6 +153,8 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     fun buildSshDaemonCommand(workspaceDir: File): Array<String> {
+        runCatching { installSyscallGuardAssetsIfNeeded(force = false) }
+            .onFailure { Log.w(TAG, "Failed to install syscall guard assets", it) }
         val escapedAuthKeys = shellEscape("/root/.ssh/authorized_keys")
 
         val script = """
@@ -233,6 +239,42 @@ class LinuxEnvironmentManager(private val context: Context) {
                 }
             }
         }
+    }
+
+    private fun installSyscallGuardAssetsIfNeeded(force: Boolean = false) {
+        if (!rootfsDir.exists()) return
+
+        val markerFile = File(rootfsDir, "usr/local/share/agentbox/syscall_guard/.version")
+        if (!force && markerFile.exists() && markerFile.readText().trim() == SYSCALL_GUARD_VERSION) {
+            return
+        }
+
+        val shareDir = File(rootfsDir, "usr/local/share/agentbox/syscall_guard")
+        val libDir = File(rootfsDir, "usr/local/lib/agentbox")
+        val binDir = File(rootfsDir, "usr/local/bin")
+        shareDir.mkdirs()
+        libDir.mkdirs()
+        binDir.mkdirs()
+
+        copyAssetToRootfs("syscall_guard/syscall_guard.c", File(shareDir, "syscall_guard.c"), executable = false)
+        copyAssetToRootfs("syscall_guard/README.md", File(shareDir, "README.md"), executable = false)
+        copyAssetToRootfs("syscall_guard/syscall-guard", File(binDir, "syscall-guard"), executable = true)
+        copyAssetToRootfs("syscall_guard/syscall-preflight", File(binDir, "syscall-preflight"), executable = true)
+        copyAssetToRootfs("syscall_guard/build-syscall-guard", File(binDir, "build-syscall-guard"), executable = true)
+
+        markerFile.writeText(SYSCALL_GUARD_VERSION + "\n")
+        markerFile.setReadable(true, false)
+        markerFile.setWritable(true, false)
+    }
+
+    private fun copyAssetToRootfs(assetName: String, outFile: File, executable: Boolean) {
+        outFile.parentFile?.mkdirs()
+        context.assets.open(assetName).use { input ->
+            FileOutputStream(outFile).use { output -> input.copyTo(output) }
+        }
+        outFile.setReadable(true, false)
+        outFile.setWritable(true, false)
+        if (executable) outFile.setExecutable(true, false)
     }
 
     private fun setupDns() {

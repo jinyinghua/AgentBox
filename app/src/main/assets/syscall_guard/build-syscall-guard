@@ -1,0 +1,19 @@
+#!/bin/sh
+set -eu
+SRC="${AGENTBOX_SYSCALL_GUARD_SRC:-/usr/local/share/agentbox/syscall_guard/syscall_guard.c}"
+OUT_DIR="${AGENTBOX_SYSCALL_GUARD_LIBDIR:-/usr/local/lib/agentbox}"
+OUT="$OUT_DIR/libsyscall_guard.so"
+CC_BIN="${CC:-cc}"
+mkdir -p "$OUT_DIR"
+if ! command -v "$CC_BIN" >/dev/null 2>&1 || ! "$CC_BIN" --version >/dev/null 2>&1; then
+  echo "No working C compiler found. Install or repair one first." >&2
+  echo "For Alpine:" >&2
+  echo "  apk add --no-cache build-base linux-headers" >&2
+  echo "If apk database says gcc is installed but /usr/bin/gcc is missing," >&2
+  echo "reinstall gcc/musl-dev/binutils after updating AgentBox proot options." >&2
+  exit 127
+fi
+if "$CC_BIN" -D_GNU_SOURCE -fPIC -shared -O2 -Wall -Wextra -o "$OUT" "$SRC" -ldl; then
+  exit 0
+fi
+exec "$CC_BIN" -D_GNU_SOURCE -fPIC -shared -O2 -Wall -Wextra -o "$OUT" "$SRC"
