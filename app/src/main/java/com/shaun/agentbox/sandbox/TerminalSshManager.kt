@@ -37,14 +37,7 @@ class TerminalSshManager(private val context: Context) {
         """.trimIndent()
 
         val args = linuxManager.buildProotCommand(workspaceDir, command)
-        val env = arrayOf(
-            "PATH=$LINUX_PATH",
-            "HOME=/root",
-            "USER=root",
-            "LOGNAME=root",
-            "TERM=xterm-256color",
-            "PROOT_TMP_DIR=${linuxManager.tmpDir.absolutePath}"
-        )
+        val env = linuxManager.buildProotEnvironmentArray()
 
         val result = NativePty.createSubprocess(
             linuxManager.prootBin.absolutePath,

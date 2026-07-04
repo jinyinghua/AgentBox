@@ -46,6 +46,46 @@ class LinuxEnvironmentManager(private val context: Context) {
     val isInstalled: Boolean
         get() = prootBin.exists() && File(rootfsDir, "etc/os-release").exists()
 
+    /**
+     * Environment variables required by the bundled PRoot runtime.
+     *
+     * PROOT_NO_SECCOMP=1 disables PRoot's seccomp acceleration path and forces the
+     * conservative ptrace path. On Android app processes this avoids frequent
+     * SIGSYS/"Bad system call" failures caused by interactions between Android's
+     * zygote seccomp policy and PRoot's own seccomp filter.
+     */
+    fun applyProotEnvironment(env: MutableMap<String, String>) {
+        env["PROOT_TMP_DIR"] = tmpDir.absolutePath
+        env["PROOT_NO_SECCOMP"] = "1"
+    }
+
+    fun buildProotEnvironmentArray(extra: Map<String, String> = emptyMap()): Array<String> {
+        val env = linkedMapOf(
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME" to "/root",
+            "USER" to "root",
+            "LOGNAME" to "root",
+            "TERM" to "xterm-256color",
+            "PROOT_TMP_DIR" to tmpDir.absolutePath,
+            "PROOT_NO_SECCOMP" to "1"
+        )
+        env.putAll(extra)
+        return env.map { (k, v) -> "$k=$v" }.toTypedArray()
+    }
+
+    private fun commonProotArgs(): Array<String> {
+        return arrayOf(
+            prootBin.absolutePath,
+            "-0",
+            "--link2symlink",
+            "-r", rootfsDir.absolutePath,
+            "-b", "/dev",
+            "-b", "/proc",
+            "-b", "/sys",
+            "-b", "/dev/pts"
+        )
+    }
+
     suspend fun install(onProgress: (Int, String) -> Unit) = withContext(Dispatchers.IO) {
         try {
             if (!systemDir.exists()) systemDir.mkdirs()
@@ -101,14 +141,7 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     fun buildProotCommand(workspaceDir: File, userCommand: String): Array<String> {
-        return arrayOf(
-            prootBin.absolutePath,
-            "-0",
-            "-r", rootfsDir.absolutePath,
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "/sys",
-            "-b", "/dev/pts",
+        return commonProotArgs() + arrayOf(
             "-b", "${workspaceDir.absolutePath}:/workspace",
             "-w", "/workspace",
             "/bin/sh", "-c", userCommand
@@ -142,14 +175,7 @@ class LinuxEnvironmentManager(private val context: Context) {
             exec /usr/sbin/sshd -D -e -E /tmp/agentbox-sshd.log -f /etc/ssh/sshd_config -p $SSH_PORT -h /etc/ssh/ssh_host_rsa_key -o PidFile=/var/run/sshd.pid
         """.trimIndent()
 
-        return arrayOf(
-            prootBin.absolutePath,
-            "-0",
-            "-r", rootfsDir.absolutePath,
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "/sys",
-            "-b", "/dev/pts",
+        return commonProotArgs() + arrayOf(
             "-b", "${workspaceDir.absolutePath}:/workspace",
             "-w", "/workspace",
             "/usr/bin/env",
@@ -160,6 +186,7 @@ class LinuxEnvironmentManager(private val context: Context) {
             "TERM=xterm-256color",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "PROOT_TMP_DIR=${tmpDir.absolutePath}",
+            "PROOT_NO_SECCOMP=1",
             "/bin/sh", "-lc", script
         )
     }
@@ -354,7 +381,7 @@ class LinuxEnvironmentManager(private val context: Context) {
         env["USER"] = "root"
         env["LOGNAME"] = "root"
         env["TERM"] = "xterm-256color"
-        env["PROOT_TMP_DIR"] = tmpDir.absolutePath
+        applyProotEnvironment(env)
 
         val process = processBuilder.start()
         val output = process.inputStream.bufferedReader().use { it.readText() }

@@ -202,7 +202,7 @@ class ToolExecutor(context: Context) {
             env["USER"] = "root"
             env["LOGNAME"] = "root"
             env["TERM"] = "xterm-256color"
-            env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+            linuxManager.applyProotEnvironment(env)
 
             val process = processBuilder.start()
             val pid = pidCounter.getAndIncrement()
@@ -376,7 +376,7 @@ class ToolExecutor(context: Context) {
             env["USER"] = "root"
             env["LOGNAME"] = "root"
             env["TERM"] = "xterm-256color"
-            env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+            linuxManager.applyProotEnvironment(env)
 
             val process = processBuilder.start()
             val output = buildString {

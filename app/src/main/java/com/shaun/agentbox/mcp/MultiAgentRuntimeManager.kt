@@ -360,7 +360,7 @@ class MultiAgentRuntimeManager private constructor(context: Context) {
                 env["USER"] = "root"
                 env["LOGNAME"] = "root"
                 env["TERM"] = "xterm-256color"
-                env["PROOT_TMP_DIR"] = linuxManager.tmpDir.absolutePath
+                linuxManager.applyProotEnvironment(env)
                 val process = processBuilder.start()
                 val output = buildString {
                     process.inputStream.bufferedReader().use { reader ->
