@@ -2,6 +2,7 @@ package com.shaun.agentbox.mcp
 
 import android.content.Context
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
+import com.shaun.agentbox.sandbox.PtyCommandRunner
 import com.shaun.agentbox.sandbox.SandboxManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,6 +36,7 @@ class ToolExecutor(context: Context) {
 
     private val sandboxManager = SandboxManager(context)
     private val linuxManager = LinuxEnvironmentManager(context)
+    private val ptyCommandRunner = PtyCommandRunner(context)
     private val json = Json { ignoreUnknownKeys = true }
     private val teacherManager = AiTeacherManager(context)
     private val multiAgentManager = MultiAgentManager(context)
@@ -43,7 +45,6 @@ class ToolExecutor(context: Context) {
     companion object {
         private const val INITIAL_CAPTURE_TIMEOUT_MS = 5_000L
         private const val MAX_OUTPUT_LENGTH = 100_000
-        private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
         /** 后台进程注册表，全局共享 */
         private val runningProcesses = ConcurrentHashMap<Long, RunningProcess>()
@@ -57,7 +58,6 @@ class ToolExecutor(context: Context) {
     /** 后台运行进程状态 */
     data class RunningProcess(
         val pid: Long,
-        val process: Process,
         val command: String,
         val startTime: Long,
         /** 所有已捕获的输出（线程安全访问） */
@@ -187,54 +187,23 @@ class ToolExecutor(context: Context) {
      */
     suspend fun executeCommand(command: String): CallToolResult = withContext(Dispatchers.IO) {
         try {
-            if (!linuxManager.isInstalled) {
-                return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
-            }
-
-            val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
-            val processBuilder = ProcessBuilder(*prootCmd)
-                .directory(sandboxManager.workspaceDir)
-                .redirectErrorStream(true)
-
-            val env = processBuilder.environment()
-            env["PATH"] = LINUX_PATH
-            env["HOME"] = "/root"
-            env["USER"] = "root"
-            env["LOGNAME"] = "root"
-            env["TERM"] = "xterm-256color"
-            linuxManager.applyProotEnvironment(env)
-
-            val process = processBuilder.start()
             val pid = pidCounter.getAndIncrement()
-
             val runningProcess = RunningProcess(
                 pid = pid,
-                process = process,
                 command = command,
                 startTime = System.currentTimeMillis()
             )
             runningProcesses[pid] = runningProcess
 
-            // 后台持续读取进程输出（不阻塞 executeCommand 返回）
             processScope.launch {
                 try {
-                    process.inputStream.bufferedReader().use { reader ->
-                        val buffer = CharArray(4096)
-                        var read: Int
-                        while (reader.read(buffer).also { read = it } != -1) {
-                            synchronized(runningProcess) {
-                                if (runningProcess.outputBuffer.length < MAX_OUTPUT_LENGTH) {
-                                    val remaining = MAX_OUTPUT_LENGTH - runningProcess.outputBuffer.length
-                                    val appendLen = minOf(remaining, read)
-                                    runningProcess.outputBuffer.append(buffer, 0, appendLen)
-                                }
-                            }
-                        }
-                    }
-                    // 流结束，等待进程退出
-                    val code = process.waitFor()
+                    val result = ptyCommandRunner.runCommand(
+                        workspaceDir = sandboxManager.workspaceDir,
+                        command = command,
+                        onOutputChunk = { chunk -> appendOutput(runningProcess, chunk) }
+                    )
                     synchronized(runningProcess) {
-                        runningProcess.exitCode = code
+                        runningProcess.exitCode = result.exitCode
                         runningProcess.isCompleted = true
                     }
                 } catch (e: Exception) {
@@ -245,10 +214,8 @@ class ToolExecutor(context: Context) {
                 }
             }
 
-            // 等待初始截获时间，让后台读取协程先收集一些输出
             delay(INITIAL_CAPTURE_TIMEOUT_MS)
 
-            // 提取初始输出并设置 lastReadOffset
             val initialOutput: String
             val isCompleted: Boolean
             val exitCode: Int?
@@ -365,46 +332,27 @@ class ToolExecutor(context: Context) {
                 return@withContext errorResult("Linux environment not installed. Please install it in the app first.")
             }
 
-            val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
-            val processBuilder = ProcessBuilder(*prootCmd)
-                .directory(sandboxManager.workspaceDir)
-                .redirectErrorStream(true)
-
-            val env = processBuilder.environment()
-            env["PATH"] = LINUX_PATH
-            env["HOME"] = "/root"
-            env["USER"] = "root"
-            env["LOGNAME"] = "root"
-            env["TERM"] = "xterm-256color"
-            linuxManager.applyProotEnvironment(env)
-
-            val process = processBuilder.start()
-            val output = buildString {
-                process.inputStream.bufferedReader().use { reader ->
-                    var totalRead = 0
-                    val buffer = CharArray(1024)
-                    var read: Int
-                    while (reader.read(buffer).also { read = it } != -1) {
-                        if (read <= 0) continue
-                        val chunk = String(buffer, 0, read)
-                        onOutputChunk(chunk)
-                        if (totalRead < MAX_OUTPUT_LENGTH) {
-                            val remaining = MAX_OUTPUT_LENGTH - totalRead
-                            val appendLen = minOf(remaining, read)
-                            append(chunk, 0, appendLen)
-                            totalRead += appendLen
-                        }
-                    }
-                }
-            }
-
-            val exitCode = process.waitFor()
+            val result = ptyCommandRunner.runCommand(
+                workspaceDir = sandboxManager.workspaceDir,
+                command = command,
+                onOutputChunk = onOutputChunk
+            )
             CallToolResult(
-                content = listOf(ToolContent(type = "text", text = output)),
-                isError = exitCode != 0
+                content = listOf(ToolContent(type = "text", text = result.output)),
+                isError = result.exitCode != 0
             )
         } catch (e: Exception) {
             errorResult("Execution failed: ${e.message}")
+        }
+    }
+
+    private fun appendOutput(runningProcess: RunningProcess, chunk: String) {
+        if (chunk.isEmpty()) return
+        synchronized(runningProcess) {
+            if (runningProcess.outputBuffer.length >= MAX_OUTPUT_LENGTH) return
+            val remaining = MAX_OUTPUT_LENGTH - runningProcess.outputBuffer.length
+            val appendLen = minOf(remaining, chunk.length)
+            runningProcess.outputBuffer.append(chunk, 0, appendLen)
         }
     }
 

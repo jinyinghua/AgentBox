@@ -51,6 +51,8 @@ class TerminalShellSession(
 
     fun isConnected(): Boolean = NativePty.isProcessAlive(pid)
 
+    fun waitForExitStatus(): Int = NativePty.waitFor(pid)
+
     fun close() {
         runCatching { outputStream.write("exit\n".toByteArray()) }
         runCatching { outputStream.flush() }

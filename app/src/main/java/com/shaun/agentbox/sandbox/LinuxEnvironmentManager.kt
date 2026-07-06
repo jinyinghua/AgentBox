@@ -157,6 +157,44 @@ class LinuxEnvironmentManager(private val context: Context) {
         )
     }
 
+    fun buildInteractivePtyShellCommand(workspaceDir: File): Array<String> {
+        return buildPtyShellCommand(
+            workspaceDir = workspaceDir,
+            shellBootstrap = """
+                export HOME=/root USER=root LOGNAME=root TERM=xterm-256color PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                cd /workspace
+                exec /bin/sh -i
+            """.trimIndent()
+        )
+    }
+
+    fun buildHeadlessPtyShellCommand(workspaceDir: File): Array<String> {
+        return buildPtyShellCommand(
+            workspaceDir = workspaceDir,
+            shellBootstrap = """
+                export HOME=/root USER=root LOGNAME=root TERM=xterm-256color PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                export PS1=
+                stty -echo 2>/dev/null || true
+                cd /workspace
+                exec /bin/sh -i
+            """.trimIndent()
+        )
+    }
+
+    fun buildHeadlessPtyEnvironmentArray(): Array<String> {
+        return buildProotEnvironmentArray()
+    }
+
+    private fun buildPtyShellCommand(workspaceDir: File, shellBootstrap: String): Array<String> {
+        runCatching { installSyscallGuardAssetsIfNeeded(force = false) }
+            .onFailure { Log.w(TAG, "Failed to install syscall guard assets", it) }
+        return commonProotArgs() + arrayOf(
+            "-b", "${workspaceDir.absolutePath}:/workspace",
+            "-w", "/workspace",
+            "/bin/sh", "-c", shellBootstrap
+        )
+    }
+
     private fun buildBaseProotEnvironment(): LinkedHashMap<String, String> {
         return linkedMapOf(
             "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

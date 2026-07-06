@@ -2,6 +2,7 @@ package com.shaun.agentbox.mcp
 
 import android.content.Context
 import com.shaun.agentbox.sandbox.LinuxEnvironmentManager
+import com.shaun.agentbox.sandbox.PtyCommandRunner
 import com.shaun.agentbox.sandbox.SandboxManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -40,6 +41,7 @@ class MultiAgentRuntimeManager private constructor(context: Context) {
     private val modelClient = SubAgentModelClient(appContext)
     private val sandboxManager = SandboxManager(appContext)
     private val linuxManager = LinuxEnvironmentManager(appContext)
+    private val ptyCommandRunner = PtyCommandRunner(appContext)
     private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val runtimes = ConcurrentHashMap<String, RuntimeState>()
@@ -56,7 +58,6 @@ class MultiAgentRuntimeManager private constructor(context: Context) {
 
         private const val COMMAND_TIMEOUT_MS = 60_000L
         private const val MAX_OUTPUT_LENGTH = 100_000
-        private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         private const val LOOP_DELAY_MS = 1500L
         private const val MAX_TOOL_RESULT_CHARS = 12000
         private const val MAX_ACTION_REPAIR_ATTEMPTS = 2
@@ -350,31 +351,11 @@ class MultiAgentRuntimeManager private constructor(context: Context) {
         }
         try {
             withTimeout(COMMAND_TIMEOUT_MS) {
-                val prootCmd = linuxManager.buildProotCommand(sandboxManager.workspaceDir, command)
-                val processBuilder = ProcessBuilder(*prootCmd)
-                    .directory(sandboxManager.workspaceDir)
-                    .redirectErrorStream(true)
-                val env = processBuilder.environment()
-                env["PATH"] = LINUX_PATH
-                env["HOME"] = "/root"
-                env["USER"] = "root"
-                env["LOGNAME"] = "root"
-                env["TERM"] = "xterm-256color"
-                linuxManager.applyProotEnvironment(env)
-                val process = processBuilder.start()
-                val output = buildString {
-                    process.inputStream.bufferedReader().use { reader ->
-                        var totalRead = 0
-                        val buffer = CharArray(4096)
-                        var read: Int
-                        while (reader.read(buffer).also { read = it } != -1) {
-                            totalRead += read
-                            if (totalRead <= MAX_OUTPUT_LENGTH) append(buffer, 0, read)
-                        }
-                    }
-                }
-                val exitCode = process.waitFor()
-                ToolCallSummary(exitCode != 0, output.ifBlank { "(no output)" })
+                val result = ptyCommandRunner.runCommand(
+                    workspaceDir = sandboxManager.workspaceDir,
+                    command = command
+                )
+                ToolCallSummary(result.exitCode != 0, result.output.ifBlank { "(no output)" })
             }
         } catch (e: Exception) {
             ToolCallSummary(true, "Execution failed: ${e.message}")
