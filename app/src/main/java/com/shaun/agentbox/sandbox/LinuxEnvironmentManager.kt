@@ -27,6 +27,17 @@ class LinuxEnvironmentManager(private val context: Context) {
         private const val SYSCALL_GUARD_VERSION = "1"
         private const val SSH_PORT = 8022
         private const val SSH_USER = "root"
+        private val PROOT_HOST_ENV_KEYS_TO_CLEAR = arrayOf(
+            "LD_LIBRARY_PATH",
+            "LD_PRELOAD",
+            "PROOT_LOADER",
+            "PROOT_LOADER_32",
+            "PROOT_LOADER_64",
+            "PROOT_TMP_DIR",
+            "TMPDIR",
+            "TMP",
+            "TEMP"
+        )
     }
 
     private val systemDir = File(context.filesDir, "system_rootfs")
@@ -39,7 +50,7 @@ class LinuxEnvironmentManager(private val context: Context) {
 
     val tmpDir: File
         get() {
-            val dir = File(context.cacheDir, "proot_tmp")
+            val dir = File(systemDir, "proot_tmp")
             if (!dir.exists()) dir.mkdirs()
             return dir
         }
@@ -50,27 +61,27 @@ class LinuxEnvironmentManager(private val context: Context) {
     /**
      * Environment variables required by the bundled PRoot runtime.
      *
+     * PRoot needs an executable temp directory for its loader trampoline. Using
+     * filesDir/system_rootfs keeps it on the same executable storage as the bundled
+     * proot binary and avoids Android cache partitions that may be mounted noexec.
+     *
      * PROOT_NO_SECCOMP=1 disables PRoot's seccomp acceleration path and forces the
      * conservative ptrace path. On Android app processes this avoids frequent
      * SIGSYS/"Bad system call" failures caused by interactions between Android's
      * zygote seccomp policy and PRoot's own seccomp filter.
      */
     fun applyProotEnvironment(env: MutableMap<String, String>) {
-        env["PROOT_TMP_DIR"] = tmpDir.absolutePath
-        env["PROOT_NO_SECCOMP"] = "1"
+        PROOT_HOST_ENV_KEYS_TO_CLEAR.forEach { env.remove(it) }
+        env.putAll(buildBaseProotEnvironment())
     }
 
     fun buildProotEnvironmentArray(extra: Map<String, String> = emptyMap()): Array<String> {
-        val env = linkedMapOf(
-            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOME" to "/root",
-            "USER" to "root",
-            "LOGNAME" to "root",
-            "TERM" to "xterm-256color",
-            "PROOT_TMP_DIR" to tmpDir.absolutePath,
-            "PROOT_NO_SECCOMP" to "1"
-        )
-        env.putAll(extra)
+        val env = buildBaseProotEnvironment()
+        extra.forEach { (key, value) ->
+            if (key !in PROOT_HOST_ENV_KEYS_TO_CLEAR) {
+                env[key] = value
+            }
+        }
         return env.map { (k, v) -> "$k=$v" }.toTypedArray()
     }
 
@@ -153,6 +164,18 @@ class LinuxEnvironmentManager(private val context: Context) {
             "-b", "${workspaceDir.absolutePath}:/workspace",
             "-w", "/workspace",
             "/bin/sh", "-c", userCommand
+        )
+    }
+
+    private fun buildBaseProotEnvironment(): LinkedHashMap<String, String> {
+        return linkedMapOf(
+            "PATH" to "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME" to "/root",
+            "USER" to "root",
+            "LOGNAME" to "root",
+            "TERM" to "xterm-256color",
+            "PROOT_TMP_DIR" to tmpDir.absolutePath,
+            "PROOT_NO_SECCOMP" to "1"
         )
     }
 
