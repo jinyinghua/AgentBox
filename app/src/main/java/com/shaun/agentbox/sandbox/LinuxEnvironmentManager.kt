@@ -74,11 +74,15 @@ class LinuxEnvironmentManager(private val context: Context) {
         return env.map { (k, v) -> "$k=$v" }.toTypedArray()
     }
 
+    /**
+     * Base proot arguments shared by MCP commands and bootstrap.
+     * Does NOT include --link2symlink, which has been observed to break
+     * /workspace bind mounts under proot on Android.
+     */
     private fun commonProotArgs(): Array<String> {
         return arrayOf(
             prootBin.absolutePath,
             "-0",
-            "--link2symlink",
             "-r", rootfsDir.absolutePath,
             "-b", "/dev",
             "-b", "/proc",
