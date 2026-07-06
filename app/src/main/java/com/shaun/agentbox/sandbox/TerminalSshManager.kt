@@ -48,7 +48,14 @@ class TerminalSshManager(private val context: Context) {
             "-w", "/workspace",
             "/bin/sh", "-c", command
         )
-        val env = linuxManager.buildProotEnvironmentArray()
+        val env = arrayOf(
+            "PATH=$LINUX_PATH",
+            "HOME=/root",
+            "USER=root",
+            "LOGNAME=root",
+            "TERM=xterm-256color",
+            "PROOT_TMP_DIR=${linuxManager.tmpDir.absolutePath}"
+        )
 
         val result = NativePty.createSubprocess(
             linuxManager.prootBin.absolutePath,
@@ -68,8 +75,22 @@ class TerminalSshManager(private val context: Context) {
         delay(200)
         if (!session.isConnected()) {
             val output = runCatching { session.readAvailable() }.getOrDefault("")
+            val exitStatus = NativePty.waitFor(result[0])
             session.close()
-            throw IllegalStateException("Shell failed to start." + if (output.isNotBlank()) "\n$output" else "")
+            throw IllegalStateException(
+                buildString {
+                    append("Shell failed to start")
+                    append(" (wait status: ")
+                    append(exitStatus)
+                    append(", PROOT_TMP_DIR=")
+                    append(linuxManager.tmpDir.absolutePath)
+                    append(")")
+                    if (output.isNotBlank()) {
+                        append("\n")
+                        append(output)
+                    }
+                }
+            )
         }
         session
     }
