@@ -27,17 +27,6 @@ class LinuxEnvironmentManager(private val context: Context) {
         private const val SYSCALL_GUARD_VERSION = "1"
         private const val SSH_PORT = 8022
         private const val SSH_USER = "root"
-        private val PROOT_HOST_ENV_KEYS_TO_CLEAR = arrayOf(
-            "LD_LIBRARY_PATH",
-            "LD_PRELOAD",
-            "PROOT_LOADER",
-            "PROOT_LOADER_32",
-            "PROOT_LOADER_64",
-            "PROOT_TMP_DIR",
-            "TMPDIR",
-            "TMP",
-            "TEMP"
-        )
     }
 
     private val systemDir = File(context.filesDir, "system_rootfs")
@@ -65,23 +54,24 @@ class LinuxEnvironmentManager(private val context: Context) {
      * filesDir/system_rootfs keeps it on the same executable storage as the bundled
      * proot binary and avoids Android cache partitions that may be mounted noexec.
      *
+     * ProcessBuilder-based launches are more reliable when they do not inherit the
+     * host app process environment. Keeping the child environment minimal makes the
+     * MCP path behave the same way as the PTY path, which already execves with an
+     * explicit environment array.
+     *
      * PROOT_NO_SECCOMP=1 disables PRoot's seccomp acceleration path and forces the
      * conservative ptrace path. On Android app processes this avoids frequent
      * SIGSYS/"Bad system call" failures caused by interactions between Android's
      * zygote seccomp policy and PRoot's own seccomp filter.
      */
     fun applyProotEnvironment(env: MutableMap<String, String>) {
-        PROOT_HOST_ENV_KEYS_TO_CLEAR.forEach { env.remove(it) }
+        env.clear()
         env.putAll(buildBaseProotEnvironment())
     }
 
     fun buildProotEnvironmentArray(extra: Map<String, String> = emptyMap()): Array<String> {
         val env = buildBaseProotEnvironment()
-        extra.forEach { (key, value) ->
-            if (key !in PROOT_HOST_ENV_KEYS_TO_CLEAR) {
-                env[key] = value
-            }
-        }
+        env.putAll(extra)
         return env.map { (k, v) -> "$k=$v" }.toTypedArray()
     }
 
