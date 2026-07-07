@@ -15,6 +15,10 @@ import java.io.File
  */
 class TerminalSshManager(private val context: Context) {
 
+    companion object {
+        private const val LINUX_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    }
+
     private val linuxManager = LinuxEnvironmentManager(context)
     private var shellSession: TerminalShellSession? = null
 
@@ -27,7 +31,14 @@ class TerminalSshManager(private val context: Context) {
         stopServerInternal()
 
         val args = linuxManager.buildInteractivePtyShellCommand(workspaceDir)
-        val env = linuxManager.buildHeadlessPtyEnvironmentArray()
+        val env = arrayOf(
+            "PATH=$LINUX_PATH",
+            "HOME=/root",
+            "USER=root",
+            "LOGNAME=root",
+            "TERM=xterm-256color",
+            "PROOT_TMP_DIR=${linuxManager.tmpDir.absolutePath}"
+        )
 
         val result = NativePty.createSubprocess(
             linuxManager.prootBin.absolutePath,
