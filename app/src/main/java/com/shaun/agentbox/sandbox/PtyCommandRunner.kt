@@ -26,6 +26,7 @@ class PtyCommandRunner(context: Context) {
         private const val READ_POLL_DELAY_MS = 16L
         private const val EXIT_DRAIN_TIMEOUT_MS = 1_000L
         private const val MARKER_PREFIX = "__AGENTBOX_EXIT__"
+        private val ANSI_ESCAPE_REGEX = Regex("""\u001B\[[0-9;?]*[ -/]*[@-~]""")
     }
 
     private val linuxManager = LinuxEnvironmentManager(context.applicationContext)
@@ -85,9 +86,10 @@ class PtyCommandRunner(context: Context) {
                     if (chunk.isNotEmpty()) {
                         transcript.append(chunk)
                         parsedOutput = parseTranscript(transcript.toString(), markerPrefix)
-                        if (parsedOutput.visibleOutput.length > emittedLength) {
-                            val delta = parsedOutput.visibleOutput.substring(emittedLength)
-                            emittedLength = parsedOutput.visibleOutput.length
+                        val visibleOutput = stripAnsi(parsedOutput.visibleOutput)
+                        if (visibleOutput.length > emittedLength) {
+                            val delta = visibleOutput.substring(emittedLength)
+                            emittedLength = visibleOutput.length
                             onOutputChunk(delta)
                         }
                     }
@@ -105,13 +107,14 @@ class PtyCommandRunner(context: Context) {
 
                 val rawWaitStatus = waitDeferred.await()
                 parsedOutput = parseTranscript(transcript.toString(), markerPrefix)
+                val visibleOutput = stripAnsi(parsedOutput.visibleOutput)
                 val exitCode = parsedOutput.exitCode ?: decodeWaitStatus(rawWaitStatus)
-                if (parsedOutput.visibleOutput.length > emittedLength) {
-                    onOutputChunk(parsedOutput.visibleOutput.substring(emittedLength))
+                if (visibleOutput.length > emittedLength) {
+                    onOutputChunk(visibleOutput.substring(emittedLength))
                 }
 
                 PtyCommandResult(
-                    output = parsedOutput.visibleOutput,
+                    output = visibleOutput,
                     exitCode = exitCode,
                     rawWaitStatus = rawWaitStatus
                 )
@@ -185,6 +188,8 @@ class PtyCommandRunner(context: Context) {
     }
 
     private fun normalizeOutput(text: String): String = text.replace("\r", "")
+
+    private fun stripAnsi(text: String): String = text.replace(ANSI_ESCAPE_REGEX, "")
 
     private fun decodeWaitStatus(status: Int): Int {
         if (status < 0) return status
