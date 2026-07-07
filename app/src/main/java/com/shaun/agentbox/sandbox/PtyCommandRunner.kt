@@ -61,6 +61,8 @@ class PtyCommandRunner(context: Context) {
                             append(rawStatus)
                             append(", PROOT_TMP_DIR=")
                             append(linuxManager.tmpDir.absolutePath)
+                            append(", env=")
+                            append(linuxManager.buildHeadlessPtyEnvironmentArray().joinToString(" "))
                             append(")")
                             if (startupOutput.isNotBlank()) {
                                 append("\n")

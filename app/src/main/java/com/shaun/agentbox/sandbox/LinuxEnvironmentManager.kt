@@ -182,7 +182,14 @@ class LinuxEnvironmentManager(private val context: Context) {
     }
 
     fun buildHeadlessPtyEnvironmentArray(): Array<String> {
-        return buildProotEnvironmentArray()
+        return arrayOf(
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME=/root",
+            "USER=root",
+            "LOGNAME=root",
+            "TERM=xterm-256color",
+            "PROOT_TMP_DIR=${tmpDir.absolutePath}"
+        )
     }
 
     private fun buildPtyShellCommand(workspaceDir: File, shellBootstrap: String): Array<String> {
